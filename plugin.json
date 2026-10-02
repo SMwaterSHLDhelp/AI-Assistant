@@ -5,7 +5,7 @@
   "api_version": 1,
   "publish": {
     "tags": ["utility", "chat"],
-    "description": "Chat with OpenAI, Claude, Gemini, Hermes, Ollama, and other models from the Quick Access Menu.",
+    "description": "Chat with OpenAI, Claude, Claude Code subscriptions, Grok, Gemini, Hermes, Ollama, and other models from the Quick Access Menu.",
     "image": "https://opengraph.githubassets.com/1/SMwaterSHLDhelp/AI-Assistant"
   }
 }

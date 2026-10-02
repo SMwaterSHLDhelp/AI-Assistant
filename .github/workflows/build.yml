@@ -2,8 +2,6 @@ name: Build plugin
 
 on:
   push:
-    branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -43,7 +41,7 @@ jobs:
       - name: Lint and test the backend
         run: |
           python -m pip install ruff pytest
-          ruff check main.py py_modules tests
+          ruff check main.py py_modules tests bridge
           python -m pytest -q
 
       - name: Install Decky CLI

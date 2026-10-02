@@ -38,13 +38,42 @@ KINDS: dict[str, ProviderKind] = {
             kind="anthropic",
             label="Anthropic Claude",
             description=(
-                "API key from the Anthropic console. Anthropic does not offer OAuth for "
-                "third-party apps to call the Claude API."
+                "API key from the Anthropic console, billed per token. Anthropic does not offer "
+                "OAuth for third-party apps to call this API. For a Claude Pro or Max subscription, "
+                "use Claude Code (subscription) instead."
             ),
             default_base_url="https://api.anthropic.com",
             default_model="claude-sonnet-4-5",
             auth="required",
             oauth="none",
+        ),
+        ProviderKind(
+            kind="claude_code",
+            label="Claude Code (subscription)",
+            description=(
+                "Claude Pro, Max, Team, or Enterprise through the official Claude Code CLI. "
+                "Leave the bridge URL empty to run claude on this Deck, or point it at the "
+                "companion bridge on a PC. Sign-in is claude login or claude setup-token. "
+                "This plugin does not reimplement Anthropic OAuth."
+            ),
+            default_base_url="",
+            default_model="sonnet",
+            auth="optional",
+            oauth="claude_code",
+        ),
+        ProviderKind(
+            kind="xai",
+            label="xAI Grok",
+            description=(
+                "xAI's OpenAI-compatible API at https://api.x.ai/v1. Use an API key from the "
+                "xAI console, or the device-code sign-in xAI publishes at auth.x.ai "
+                "(SuperGrok or X Premium+). That login uses xAI's public Grok CLI client, "
+                "the same one Hermes Agent uses, and it has no client secret."
+            ),
+            default_base_url="https://api.x.ai/v1",
+            default_model="grok-4.7",
+            auth="required",
+            oauth="xai",
         ),
         ProviderKind(
             kind="gemini",

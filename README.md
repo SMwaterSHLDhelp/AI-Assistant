@@ -83,11 +83,49 @@ API keys and OAuth tokens are stored in Decky's plugin settings directory (`cred
 
 You must paste an OAuth **client ID** that OpenAI has registered for you. This plugin does **not** embed the Codex CLI's client ID and does not pretend to be Codex. OpenAI does not give arbitrary third-party apps a client that spends a ChatGPT Plus or Pro quota. A Sign in with ChatGPT token is often an identity token and may be rejected by `api.openai.com`. **Test connection** shows that error as-is. If you do not have your own client ID, use an API key.
 
-### Anthropic Claude
+### Anthropic Claude (API key)
 
-API key only, from [console.anthropic.com](https://console.anthropic.com/). The default base URL is `https://api.anthropic.com`.
+API key only, from [console.anthropic.com](https://console.anthropic.com/). The default base URL is `https://api.anthropic.com`. You pay per token.
 
-Anthropic does not offer OAuth for third-party apps that call the Claude API. The login used by Claude.ai and Claude Code is first-party. This plugin does not imitate that login. There is no OAuth button for Claude.
+Anthropic does not offer OAuth for third-party apps that call this API. The login used by Claude.ai and Claude Code is first-party. This provider does not imitate that login and has no OAuth button.
+
+### Claude Code (subscription)
+
+This is the path for a **Claude Pro, Max, Team, or Enterprise** subscription, the same login Claude Code uses. It does not use an Anthropic API key and it does not bill per token. The plugin runs the official `claude` CLI (`claude -p --output-format stream-json`, with `--model` and `--resume` for the conversation). It does **not** reimplement Anthropic's OAuth and it does not send the subscription token to a private API itself.
+
+Use of this provider is subject to [Anthropic's terms for Claude Code](https://code.claude.com/docs/en/legal-and-compliance). Each person signs in with their own Claude account. The plugin does not bundle Claude Code and does not implement a Claude.ai login of its own: it runs the unmodified `claude` binary, and a subscription login can only do what that plan allows.
+
+Model choices are the CLI aliases `sonnet`, `opus`, and `haiku`. You can also type a full model id if your CLI accepts it. Rate limits and usage limits from the subscription are shown in the chat as their own message, not as a generic failure.
+
+**On the Deck.** Install Claude Code from the [official setup page](https://code.claude.com/docs/en/setup) (the native installer, or `npm install -g @anthropic-ai/claude-code`). Leave **Bridge URL** empty. Either:
+
+- run `claude login` in a terminal on the Deck, or
+- save the provider, then press **Sign in with setup-token**. The plugin runs `claude setup-token`, shows any URL or code the CLI prints, and stores the token it prints in `credentials.json` (mode `0600`). That token is passed to the CLI as `CLAUDE_CODE_OAUTH_TOKEN`. You can also paste a token from a computer where you already ran `claude setup-token`.
+
+If `claude` is not on `PATH`, **Test connection** explains how to install it. Tools are disabled for these chats (`--tools ""`), so the CLI is used as a conversation, not as an agent that edits files on the Deck.
+
+**On a PC, for Decks without Node.** From a clone of this repo, on the computer that has Claude Code installed and signed in:
+
+```bash
+export CLAUDE_BRIDGE_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+python3 bridge/claude_bridge.py --host 0.0.0.0 --port 8765
+```
+
+Sign in on that PC with `claude login` or `claude setup-token` before chatting. In the plugin, set **Bridge URL** to `http://<that-pc-lan-ip>:8765` and put the same secret in **Bridge shared secret**. The script only wraps `claude -p` and checks the secret. It does not log the secret or the prompt. Keep it on your LAN.
+
+The bridge is not inside the Decky zip. Copy `bridge/claude_bridge.py` from this repository.
+
+### xAI Grok
+
+xAI's official OpenAI-compatible API. The default base URL is `https://api.x.ai/v1`. Chat uses streaming `POST /v1/chat/completions`. **Test connection** calls `GET /v1/models`. The default model is `grok-4.7`. This plugin does not call grok.com or other unofficial endpoints.
+
+**API key.** Create one in the [xAI console](https://console.x.ai/). That is the path that bills the API.
+
+**Device-code sign-in (SuperGrok or X Premium+).** xAI publishes an OAuth authorization server at `https://auth.x.ai`. Its [OpenID discovery document](https://auth.x.ai/.well-known/openid-configuration) lists a device-code endpoint, the device-code grant, refresh tokens, and public clients (`token_endpoint_auth_methods_supported` includes `none`, so there is no client secret). The plugin uses that device flow with xAI's public Grok CLI client id, the same client [Hermes Agent](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/guides/xai-grok-oauth.md) documents for its xAI Grok OAuth provider. Scopes are the published set `openid profile email offline_access grok-cli:access api:access`. Tokens are stored in `credentials.json` (mode `0600`) and refreshed with the refresh token.
+
+Press **Sign in with device code**, open the page, and enter the code. No OAuth client id or secret is required from you.
+
+xAI decides which subscriptions can call the API this way. Hermes has seen HTTP 403 for some SuperGrok tiers after a successful browser login. If that happens, use an API key instead. The chat error says so.
 
 ### Google Gemini
 
@@ -151,7 +189,7 @@ Each request also includes the system prompt from settings, if you set one. The 
 - Conversations live in `sessions.json` under Decky's runtime data directory, also mode `0600`.
 - Logs record the provider type, model id, and status. A log filter redacts bearer tokens, `sk-` keys, Google API keys, and similar strings. Authorization headers are not logged. OAuth callback URLs are not logged, because they contain one-time codes.
 - Uninstalling the plugin deletes `credentials.json` and `sessions.json`.
-- OpenRouter, OpenAI, Anthropic, and Google each keep their own logs of requests you send them. Ollama and llama.cpp stay on your network only when the base URL is local.
+- OpenRouter, OpenAI, Anthropic, xAI, and Google each keep their own logs of requests you send them. Ollama, llama.cpp, and the Claude Code bridge stay on your network only when the base URL is local. Claude Code on the Deck talks to Anthropic through the official CLI, under your Claude subscription.
 - Google OAuth, if you use it, asks for the broad `cloud-platform` scope described above.
 
 ## Project layout
@@ -163,10 +201,11 @@ rollup.config.js     @decky/rollup preset
 src/                 React + TypeScript Quick Access panel and settings page
 main.py              Decky Plugin class
 py_modules/ai_assistant/   provider implementations (packaged into the zip)
+bridge/claude_bridge.py    optional PC-side companion for Claude Code (not inside the Decky zip)
 decky.pyi            Type stubs for the loader's `decky` module
 ```
 
-To add a provider, add a `ProviderKind` in `py_modules/ai_assistant/catalog.py` and a list/stream function in `providers.py`. OAuth is only wired for providers that publish a real flow (`openai` and `google`).
+To add a provider, add a `ProviderKind` in `py_modules/ai_assistant/catalog.py` and a list/stream function in `providers.py`. OAuth is only wired for providers that publish a real flow (`openai`, `google`, and xAI's device-code server). Claude Code sign-in shells out to `claude setup-token` instead of calling Anthropic.
 
 ## Not done yet
 
@@ -175,7 +214,7 @@ To add a provider, add a `ProviderKind` in `py_modules/ai_assistant/catalog.py` 
 - Image or file attachments.
 - More than one streaming reply at a time.
 - A way to spend a ChatGPT Plus subscription. OpenAI does not offer that to third-party clients, and this plugin does not reuse the Codex client ID.
-- Anthropic OAuth. They do not offer it to third-party apps.
+- Anthropic API OAuth. They do not offer it to third-party apps. A Claude subscription is available through the Claude Code CLI provider above, which is a different product from the per-token API.
 
 ## License
 

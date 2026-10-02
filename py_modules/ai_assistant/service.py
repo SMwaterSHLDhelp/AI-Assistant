@@ -9,8 +9,9 @@ import threading
 import time
 from typing import Any, Protocol
 
-from . import oauth, providers
+from . import claude_code, oauth, providers
 from .catalog import catalog_payload, get_kind
+from .claude_code import ClaudeCodeError
 from .http_util import HttpError
 from .oauth import OAuthError
 from .redact import redact
@@ -123,7 +124,7 @@ class AssistantService:
         provider = await self._provider_ready(provider_id)
         try:
             models = await asyncio.to_thread(providers.list_models, provider)
-        except (HttpError, ValueError, OSError) as exc:
+        except (HttpError, ValueError, OSError, ClaudeCodeError) as exc:
             self.host.warning("Connection test failed kind=%s", provider.get("kind"))
             return _fail(str(exc))
         self.host.info("Connection test ok kind=%s models=%s", provider.get("kind"), len(models))
@@ -138,7 +139,7 @@ class AssistantService:
         provider = await self._provider_ready(provider_id)
         try:
             models = await asyncio.to_thread(providers.list_models, provider)
-        except (HttpError, ValueError, OSError) as exc:
+        except (HttpError, ValueError, OSError, ClaudeCodeError) as exc:
             return _fail(str(exc))
         return {"ok": True, "models": models[:80]}
 
@@ -189,9 +190,19 @@ class AssistantService:
     def start_oauth(self, provider_id: str, flow: str) -> dict[str, Any]:
         provider = self.store.get_provider(provider_id)
         kind = get_kind(str(provider.get("kind")))
-        if kind.oauth == "none":
+        if kind.kind == "claude_code":
+            if str(provider.get("base_url") or "").strip():
+                return _fail(
+                    "Remote mode uses the Claude Code login on the PC running the bridge. "
+                    "On that PC run claude login or claude setup-token."
+                )
+            flow = "setup-token"
+        elif kind.oauth == "xai":
+            if flow not in {"device"}:
+                return _fail("xAI sign-in uses the device-code flow.")
+        elif kind.oauth == "none":
             return _fail(f"{kind.label} does not offer third-party OAuth. Use an API key.")
-        if flow not in {"device", "pkce"}:
+        elif flow not in {"device", "pkce"}:
             return _fail("Choose device or PKCE sign-in")
         previous = self._oauth_cancel.get(provider_id)
         if previous is not None:
@@ -283,6 +294,7 @@ class AssistantService:
         cancel: threading.Event,
     ) -> None:
         collected: list[str] = []
+        meta: dict[str, Any] = {}
         try:
             provider = await self._provider_ready(provider_id)
             chosen = model.strip() or str(provider.get("default_model") or "")
@@ -296,11 +308,12 @@ class AssistantService:
                 if item.get("role") in {"user", "assistant"}
             ]
             messages = providers.prepare_messages(provider, history, str(config.get("system_prompt") or ""))
+            meta["session_id"] = str(current.get("claude_session_id") or "")
             self.host.info("Chat started kind=%s model=%s", provider.get("kind"), chosen)
 
             def _produce(queue: asyncio.Queue[tuple[str, object]], loop: asyncio.AbstractEventLoop) -> None:
                 try:
-                    for delta in providers.iter_text(provider, messages, chosen, cancel):
+                    for delta in providers.iter_text(provider, messages, chosen, cancel, meta):
                         if cancel.is_set():
                             break
                         asyncio.run_coroutine_threadsafe(queue.put(("delta", delta)), loop).result()
@@ -331,6 +344,9 @@ class AssistantService:
             full = "".join(collected)
             if full:
                 self.store.append_message(session_id, "assistant", full)
+            resumed_now = str(meta.get("claude_session_id") or "")
+            if resumed_now:
+                self.store.set_claude_session(session_id, resumed_now)
             self.host.info("Chat finished kind=%s chars=%s", provider.get("kind"), len(full))
             data = self.store.load_sessions()
             shown = next((item for item in data["sessions"] if item.get("id") == session_id), None)
@@ -354,12 +370,21 @@ class AssistantService:
                 {"type": "chat_error", "request_id": request_id, "session_id": session_id, "error": redact(str(exc))}
             )
         finally:
+            resumed = str(meta.get("claude_session_id") or "")
+            if resumed:
+                try:
+                    self.store.set_claude_session(session_id, resumed)
+                except Exception:
+                    self.host.warning("Could not store the Claude Code session id")
             self._streams.pop(request_id, None)
 
     async def _run_oauth(self, provider_id: str, flow: str, cancel: threading.Event) -> None:
         try:
             provider = self.store.get_provider(provider_id)
             kind = str(provider.get("kind"))
+            if flow == "setup-token":
+                await self._run_claude_setup(provider_id, cancel)
+                return
             if flow == "device":
                 started = await asyncio.to_thread(self._device_start, provider)
             else:
@@ -395,6 +420,41 @@ class AssistantService:
             self._oauth_cancel.pop(provider_id, None)
             await self._emit({"type": "oauth", "provider_id": provider_id, **self._public_oauth(provider_id)})
 
+    async def _run_claude_setup(self, provider_id: str, cancel: threading.Event) -> None:
+        binary = claude_code.find_claude()
+        if not binary:
+            raise ClaudeCodeError(claude_code.INSTALL_HINT)
+        loop = asyncio.get_running_loop()
+        self._oauth[provider_id] = {
+            "status": "pending",
+            "flow": "setup-token",
+            "message": "Starting claude setup-token…",
+        }
+        await self._emit({"type": "oauth", "provider_id": provider_id, **self._public_oauth(provider_id)})
+
+        def on_update(info: dict[str, str]) -> None:
+            self._oauth[provider_id] = {
+                "status": "pending",
+                "flow": "setup-token",
+                "verification_url": info.get("verification_url") or "",
+                "user_code": info.get("user_code") or "",
+                "message": info.get("message") or "",
+            }
+            future = asyncio.run_coroutine_threadsafe(
+                self._emit({"type": "oauth", "provider_id": provider_id, **self._public_oauth(provider_id)}),
+                loop,
+            )
+            future.result()
+
+        token = await asyncio.to_thread(claude_code.run_setup_token, binary, cancel, on_update)
+        self.store.set_api_key(provider_id, token)
+        self._oauth[provider_id] = {
+            "status": "success",
+            "flow": "setup-token",
+            "message": "Signed in. The Claude Code token is saved on this Deck.",
+        }
+        self.host.info("Claude Code setup-token saved")
+
     def _device_start(self, provider: dict[str, Any]) -> dict[str, Any]:
         client_id = str(provider.get("oauth_client_id") or "")
         if provider.get("kind") == "openai":
@@ -406,17 +466,22 @@ class AssistantService:
         if provider.get("kind") == "gemini":
             started = oauth.google_device_start(client_id)
             return {**started, "message": "Open the verification page and enter the code."}
+        if provider.get("kind") == "xai":
+            return oauth.xai_device_start()
         raise OAuthError("This provider does not offer device login")
 
     def _device_wait(self, provider: dict[str, Any], started: dict[str, Any], cancel: threading.Event) -> dict[str, Any]:
         interval = int(started.get("interval") or 5)
-        deadline = time.time() + 15 * 60
+        expires_in = int(started.get("expires_in") or 15 * 60)
+        deadline = time.time() + max(30, min(expires_in, 15 * 60))
         client_id = str(provider.get("oauth_client_id") or "")
         secret = str(provider.get("oauth_client_secret") or "")
         while not cancel.is_set() and time.time() < deadline:
             try:
                 if provider.get("kind") == "openai":
                     tokens = oauth.openai_device_poll(client_id, str(started["device_auth_id"]), str(started["user_code"]))
+                elif provider.get("kind") == "xai":
+                    tokens = oauth.xai_device_poll(str(started["device_code"]))
                 else:
                     tokens = oauth.google_device_poll(client_id, secret, str(started["device_code"]))
             except OAuthError as exc:
