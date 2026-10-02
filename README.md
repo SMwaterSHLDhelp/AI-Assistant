@@ -14,15 +14,32 @@ Screenshots from a Steam Deck are not in the repo yet. They will replace this pl
 
 ## Install
 
-This plugin is **not in the Decky plugin store yet**. Install the zip yourself with Decky's developer tools.
+This plugin is **not in the Decky plugin store yet**.
+
+### Install Plugin from URL
+
+This is the path Decky's **Install Plugin from URL** button expects. The release asset is always named `AI-Assistant.zip`, so this address keeps working after each stable release:
+
+`https://github.com/SMwaterSHLDhelp/AI-Assistant/releases/latest/download/AI-Assistant.zip`
 
 1. Install Decky Loader from [decky.xyz](https://decky.xyz) if you have not already.
-2. Download `AI Assistant.zip` from a [GitHub Release](https://github.com/SMwaterSHLDhelp/AI-Assistant/releases) or from the artifact on a successful Actions run.
-3. Copy the zip to your Deck (a USB drive, SSH, or the browser download folder all work).
-4. In Game Mode, open the Quick Access Menu and the Decky icon.
-5. Open the settings gear, then **Developer**.
-6. Choose **Install Plugin from ZIP** and select `AI Assistant.zip`.
-7. If the plugin does not show up, restart Decky from that same menu. It appears as **AI Assistant**.
+2. In Game Mode, open the Quick Access Menu and the Decky icon.
+3. Open the settings gear, then **Developer**.
+4. Choose **Install Plugin from URL**.
+5. Paste the address above and confirm.
+6. If the plugin does not show up, restart Decky from that same menu. It appears as **AI Assistant**.
+
+`/releases/latest/` is the newest GitHub Release that is not a prerelease. That link starts working when `v0.1.0` is published. A test build cut from a branch uses a prerelease tag, and its zip is the asset on that prerelease, not this `latest` URL.
+
+The zip has one top-level folder, `AI Assistant` (the `name` in `plugin.json`). Inside it are `plugin.json`, `dist/index.js`, `main.py`, `package.json`, and `LICENSE`, plus the Python package and the README. Decky installs that folder under `~/homebrew/plugins/`.
+
+### Install Plugin from ZIP
+
+1. Download `AI-Assistant.zip` from a [GitHub Release](https://github.com/SMwaterSHLDhelp/AI-Assistant/releases) or from the artifact on a successful Actions run.
+2. Copy the zip to your Deck (a USB drive, SSH, or the browser download folder all work).
+3. Open the same **Developer** menu.
+4. Choose **Install Plugin from ZIP** and select `AI-Assistant.zip`.
+5. Restart Decky if the plugin does not appear.
 
 You can also unzip it so this folder exists:
 
@@ -62,7 +79,7 @@ The installable zip is produced by the Decky CLI, which builds the frontend insi
 decky plugin build -o ./out
 ```
 
-That writes `out/AI Assistant.zip`. GitHub Actions does this on every pull request and on tags. See [`.github/workflows/build.yml`](.github/workflows/build.yml).
+That writes `out/AI Assistant.zip` (the Decky CLI uses the name from `plugin.json`). The GitHub Actions workflow renames that file to `AI-Assistant.zip` before uploading it, and on tags `v*` it attaches that exact filename to the GitHub Release. A tag that contains a hyphen, such as `v0.1.0-rc.1`, is published as a prerelease so it does not replace `/releases/latest/`. See [`.github/workflows/build.yml`](.github/workflows/build.yml).
 
 `pnpm run build` alone is enough to refresh `dist/` while you are developing. Decky only loads the zip layout above, not the TypeScript sources.
 
