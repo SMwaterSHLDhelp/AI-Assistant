@@ -1,8 +1,8 @@
-import { addEventListener, removeEventListener } from "@decky/api";
+import { addEventListener, removeEventListener, toaster } from "@decky/api";
 import {
   ButtonItem,
   ConfirmModal,
-  DropdownItem,
+  Focusable,
   Navigation,
   PanelSection,
   PanelSectionRow,
@@ -20,6 +20,7 @@ import {
   startOAuth,
   testProvider,
 } from "../api";
+import { fieldValue } from "../form";
 import { copyText } from "../steam";
 import type { AppState, BackendEvent, ProviderInput, ProviderKindInfo, PublicProvider } from "../types";
 
@@ -59,13 +60,25 @@ export function SettingsPage() {
   const [error, setError] = useState("");
   const [oauth, setOauth] = useState({ status: "", message: "", userCode: "", url: "" });
 
+  const report = (message: string) => {
+    setError(message);
+    toaster.toast({ title: "AI Assistant", body: message, duration: 6000 });
+  };
+
   const load = async () => {
-    const loaded = await getState();
-    if (!loaded.ok) {
-      setError(loaded.error || "Could not load settings");
-      return;
+    try {
+      const loaded = await getState();
+      if (!loaded.ok) {
+        report(loaded.error || "Could not load settings");
+        return;
+      }
+      setState(loaded);
+      if (!loaded.catalog || loaded.catalog.length === 0) {
+        report("The provider list came back empty. Reopen settings, or reload the plugin.");
+      }
+    } catch (err) {
+      report(err instanceof Error ? err.message : "Could not load settings");
     }
-    setState(loaded);
   };
 
   useEffect(() => {
@@ -92,12 +105,34 @@ export function SettingsPage() {
   const beginCreate = () => {
     const first = state.catalog[0];
     if (!first) {
+      report("Provider types have not loaded yet. Reopen settings and try Add provider again.");
       return;
     }
     setDraft(blankDraft(first));
     setNotice("");
     setError("");
     setOauth({ status: "", message: "", userCode: "", url: "" });
+  };
+
+  const selectKind = (nextKind: ProviderKindInfo) => {
+    setDraft((prev) => {
+      if (!prev) {
+        return blankDraft(nextKind);
+      }
+      const previous = state.catalog.find((item) => item.kind === prev.kind);
+      return {
+        ...prev,
+        kind: nextKind.kind,
+        name: !prev.name || prev.name === previous?.label ? nextKind.label : prev.name,
+        base_url:
+          !prev.base_url || prev.base_url === previous?.default_base_url ? nextKind.default_base_url : prev.base_url,
+        default_model:
+          !prev.default_model || prev.default_model === previous?.default_model
+            ? nextKind.default_model
+            : prev.default_model,
+      };
+    });
+    setError("");
   };
 
   const beginEdit = (provider: PublicProvider) => {
@@ -153,9 +188,15 @@ export function SettingsPage() {
     if (draft.id) {
       payload.id = draft.id;
     }
-    const result = await saveProvider(payload);
+    let result;
+    try {
+      result = await saveProvider(payload);
+    } catch (err) {
+      report(err instanceof Error ? err.message : "Could not save the provider");
+      return;
+    }
     if (!result.ok || !result.provider) {
-      setError(result.error || "Could not save the provider");
+      report(result.error || "Could not save the provider");
       return;
     }
     setError("");
@@ -165,13 +206,19 @@ export function SettingsPage() {
   };
 
   const saveDefaults = async () => {
-    const result = await saveSettings({
-      system_prompt: state.system_prompt,
-      default_provider_id: state.default_provider_id,
-      default_model: state.default_model,
-    });
+    let result;
+    try {
+      result = await saveSettings({
+        system_prompt: state.system_prompt,
+        default_provider_id: state.default_provider_id,
+        default_model: state.default_model,
+      });
+    } catch (err) {
+      report(err instanceof Error ? err.message : "Could not save defaults");
+      return;
+    }
     if (!result.ok) {
-      setError(result.error || "Could not save defaults");
+      report(result.error || "Could not save defaults");
       return;
     }
     setNotice("Defaults saved.");
@@ -183,9 +230,15 @@ export function SettingsPage() {
       setError("Save the provider before testing it");
       return;
     }
-    const result = await testProvider(draft.id);
+    let result;
+    try {
+      result = await testProvider(draft.id);
+    } catch (err) {
+      report(err instanceof Error ? err.message : "Connection failed");
+      return;
+    }
     if (!result.ok) {
-      setError(result.error || "Connection failed");
+      report(result.error || "Connection failed");
       return;
     }
     setError("");
@@ -201,9 +254,15 @@ export function SettingsPage() {
       return;
     }
     setOauth({ status: "starting", message: "Contacting the provider…", userCode: "", url: "" });
-    const result = await startOAuth(draft.id, flow);
+    let result;
+    try {
+      result = await startOAuth(draft.id, flow);
+    } catch (err) {
+      report(err instanceof Error ? err.message : "Could not start sign-in");
+      return;
+    }
     if (!result.ok) {
-      setError(result.error || "Could not start sign-in");
+      report(result.error || "Could not start sign-in");
       return;
     }
     setError("");
@@ -216,7 +275,10 @@ export function SettingsPage() {
   };
 
   return (
-    <div style={{ padding: "16px", maxWidth: "900px", margin: "0 auto" }}>
+    <Focusable
+      flow-children="column"
+      style={{ padding: "16px 16px 48px", maxWidth: "900px", margin: "0 auto" }}
+    >
       <PanelSection title="AI Assistant settings">
         <PanelSectionRow>
           <div>Credentials are stored on this Deck, mode 0600, and are never written to the plugin log.</div>
@@ -226,32 +288,48 @@ export function SettingsPage() {
         </ButtonItem>
       </PanelSection>
 
+      {error ? (
+        <PanelSection title="Problem">
+          <PanelSectionRow>
+            <div style={{ color: "#f2b8b5", whiteSpace: "pre-wrap" }}>{error}</div>
+          </PanelSectionRow>
+        </PanelSection>
+      ) : null}
+      {notice ? (
+        <PanelSection title="Status">
+          <PanelSectionRow>
+            <div>{notice}</div>
+          </PanelSectionRow>
+        </PanelSection>
+      ) : null}
+
       <PanelSection title="Defaults">
-        <DropdownItem
-          label="Default provider"
-          menuLabel="Default provider"
-          rgOptions={
-            state.providers.length > 0
-              ? state.providers.map((item) => ({ label: item.name, data: item.id }))
-              : [{ label: "None yet", data: "" }]
-          }
-          selectedOption={state.default_provider_id}
-          disabled={state.providers.length === 0}
-          onChange={(option) => {
-            const id = String(option.data);
-            const match = state.providers.find((item) => item.id === id);
-            setState((prev) => ({
-              ...prev,
-              default_provider_id: id,
-              default_model: match?.default_model || prev.default_model,
-            }));
-          }}
-        />
+        {state.providers.length === 0 ? (
+          <PanelSectionRow>
+            <div>No providers yet. Add one below, then choose it here.</div>
+          </PanelSectionRow>
+        ) : (
+          state.providers.map((item) => (
+            <ButtonItem
+              key={item.id}
+              layout="below"
+              onClick={() =>
+                setState((prev) => ({
+                  ...prev,
+                  default_provider_id: item.id,
+                  default_model: item.default_model || prev.default_model,
+                }))
+              }
+            >
+              {state.default_provider_id === item.id ? `Default: ${item.name}` : `Use ${item.name}`}
+            </ButtonItem>
+          ))
+        )}
         <PanelSectionRow>
           <TextField
             label="Default model"
             value={state.default_model}
-            onChange={(event) => setState((prev) => ({ ...prev, default_model: event.target.value }))}
+            onChange={(event) => setState((prev) => ({ ...prev, default_model: fieldValue(event) }))}
           />
         </PanelSectionRow>
         <PanelSectionRow>
@@ -259,7 +337,7 @@ export function SettingsPage() {
             label="System prompt"
             description="Sent with every request. It is not shown as a chat bubble."
             value={state.system_prompt}
-            onChange={(event) => setState((prev) => ({ ...prev, system_prompt: event.target.value }))}
+            onChange={(event) => setState((prev) => ({ ...prev, system_prompt: fieldValue(event) }))}
           />
         </PanelSectionRow>
         <ButtonItem layout="below" onClick={() => void saveDefaults()}>
@@ -280,35 +358,21 @@ export function SettingsPage() {
 
       {draft ? (
         <PanelSection title={draft.id ? "Edit provider" : "New provider"}>
-          <DropdownItem
-            label="Type"
-            menuLabel="Provider type"
-            rgOptions={state.catalog.map((item) => ({ label: item.label, data: item.kind }))}
-            selectedOption={draft.kind}
-            onChange={(option) => {
-              const nextKind = state.catalog.find((item) => item.kind === option.data);
-              if (!nextKind) {
-                return;
-              }
-              setDraft((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      kind: nextKind.kind,
-                      base_url: prev.base_url && prev.base_url !== kind?.default_base_url ? prev.base_url : nextKind.default_base_url,
-                      default_model: prev.default_model || nextKind.default_model,
-                    }
-                  : prev,
-              );
-            }}
-          />
+          <PanelSectionRow>
+            <div>{`Type: ${kind?.label || draft.kind}. Pick a type below. The highlighted choice is the one that will be saved.`}</div>
+          </PanelSectionRow>
+          {state.catalog.map((item) => (
+            <ButtonItem key={item.kind} layout="below" onClick={() => selectKind(item)}>
+              {item.kind === draft.kind ? `Selected: ${item.label}` : item.label}
+            </ButtonItem>
+          ))}
           {kind ? (
             <PanelSectionRow>
               <div>{kind.description}</div>
             </PanelSectionRow>
           ) : null}
           <PanelSectionRow>
-            <TextField label="Name" value={draft.name} onChange={(event) => patchDraft(setDraft, { name: event.target.value })} />
+            <TextField label="Name" value={draft.name} onChange={(event) => patchDraft(setDraft, { name: fieldValue(event) })} />
           </PanelSectionRow>
           <PanelSectionRow>
             <TextField
@@ -319,14 +383,14 @@ export function SettingsPage() {
                   : undefined
               }
               value={draft.base_url}
-              onChange={(event) => patchDraft(setDraft, { base_url: event.target.value })}
+              onChange={(event) => patchDraft(setDraft, { base_url: fieldValue(event) })}
             />
           </PanelSectionRow>
           <PanelSectionRow>
             <TextField
               label="Default model"
               value={draft.default_model}
-              onChange={(event) => patchDraft(setDraft, { default_model: event.target.value })}
+              onChange={(event) => patchDraft(setDraft, { default_model: fieldValue(event) })}
             />
           </PanelSectionRow>
           <PanelSectionRow>
@@ -334,7 +398,7 @@ export function SettingsPage() {
               label="Max tokens"
               mustBeNumeric
               value={draft.max_tokens}
-              onChange={(event) => patchDraft(setDraft, { max_tokens: event.target.value })}
+              onChange={(event) => patchDraft(setDraft, { max_tokens: fieldValue(event) })}
             />
           </PanelSectionRow>
           <PanelSectionRow>
@@ -343,7 +407,7 @@ export function SettingsPage() {
               bIsPassword
               description={secretDescription(draft.kind, draft.base_url, draft.has_api_key, draft.api_key_last4)}
               value={draft.api_key}
-              onChange={(event) => patchDraft(setDraft, { api_key: event.target.value, clear_api_key: false })}
+              onChange={(event) => patchDraft(setDraft, { api_key: fieldValue(event), clear_api_key: false })}
             />
           </PanelSectionRow>
           {draft.has_api_key ? (
@@ -442,7 +506,7 @@ export function SettingsPage() {
                   label="OAuth client ID"
                   description="Required only for OAuth. API keys do not use this."
                   value={draft.oauth_client_id}
-                  onChange={(event) => patchDraft(setDraft, { oauth_client_id: event.target.value })}
+                  onChange={(event) => patchDraft(setDraft, { oauth_client_id: fieldValue(event) })}
                 />
               </PanelSectionRow>
               {kind.oauth === "google" ? (
@@ -457,7 +521,7 @@ export function SettingsPage() {
                     }
                     value={draft.oauth_client_secret}
                     onChange={(event) =>
-                      patchDraft(setDraft, { oauth_client_secret: event.target.value, clear_oauth_secret: false })
+                      patchDraft(setDraft, { oauth_client_secret: fieldValue(event), clear_oauth_secret: false })
                     }
                   />
                 </PanelSectionRow>
@@ -509,25 +573,34 @@ export function SettingsPage() {
               layout="below"
               onClick={() => {
                 const id = draft.id;
-                showModal(
-                  <ConfirmModal
-                    strTitle="Delete this provider?"
-                    strDescription="The saved key and tokens for this provider will be removed."
-                    strOKButtonText="Delete"
-                    onOK={() => {
-                      void (async () => {
-                        const result = await deleteProvider(id);
-                        if (!result.ok) {
-                          setError(result.error || "Could not delete the provider");
-                          return;
-                        }
-                        setDraft(null);
-                        setNotice("Provider deleted.");
-                        await load();
-                      })();
-                    }}
-                  />,
-                );
+                try {
+                  showModal(
+                    <ConfirmModal
+                      strTitle="Delete this provider?"
+                      strDescription="The saved key and tokens for this provider will be removed."
+                      strOKButtonText="Delete"
+                      onOK={() => {
+                        void (async () => {
+                          try {
+                            const result = await deleteProvider(id);
+                            if (!result.ok) {
+                              report(result.error || "Could not delete the provider");
+                              return;
+                            }
+                            setDraft(null);
+                            setNotice("Provider deleted.");
+                            await load();
+                          } catch (err) {
+                            report(err instanceof Error ? err.message : "Could not delete the provider");
+                          }
+                        })();
+                      }}
+                    />,
+                    window,
+                  );
+                } catch (err) {
+                  report(err instanceof Error ? err.message : "Could not open the delete confirmation");
+                }
               }}
             >
               Delete provider
@@ -535,22 +608,7 @@ export function SettingsPage() {
           ) : null}
         </PanelSection>
       ) : null}
-
-      {notice ? (
-        <PanelSection title="Status">
-          <PanelSectionRow>
-            <div>{notice}</div>
-          </PanelSectionRow>
-        </PanelSection>
-      ) : null}
-      {error ? (
-        <PanelSection title="Problem">
-          <PanelSectionRow>
-            <div style={{ color: "#f2b8b5", whiteSpace: "pre-wrap" }}>{error}</div>
-          </PanelSectionRow>
-        </PanelSection>
-      ) : null}
-    </div>
+    </Focusable>
   );
 }
 
