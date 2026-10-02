@@ -36,6 +36,16 @@ GOOGLE_SCOPES = " ".join(
     )
 )
 OPENAI_PKCE_SCOPES = "openid profile email offline_access"
+# Public Grok CLI client. xAI's OpenID discovery document
+# (https://auth.x.ai/.well-known/openid-configuration) advertises the device-code
+# grant and token auth method "none", so a public client does not use a secret.
+# Hermes Agent, OpenCode, and others call this same client. It is not Hermes's
+# private credential. See https://github.com/NousResearch/hermes-agent
+XAI_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
+XAI_SCOPES = "openid profile email offline_access grok-cli:access api:access"
+XAI_DEVICE_URL = "https://auth.x.ai/oauth2/device/code"
+XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
+XAI_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 PKCE_PORT_OPENAI = 8137
 PKCE_PORT_GOOGLE = 8138
 _LOGIN_TIMEOUT = 15 * 60
@@ -231,6 +241,17 @@ def refresh_access_token(provider: dict[str, Any]) -> dict[str, Any] | None:
                 },
                 timeout=20,
             )
+        elif kind == "xai":
+            payload = request_json(
+                "POST",
+                XAI_TOKEN_URL,
+                form={
+                    "client_id": XAI_CLIENT_ID,
+                    "refresh_token": refresh,
+                    "grant_type": "refresh_token",
+                },
+                timeout=20,
+            )
         else:
             return None
     except HttpError as exc:
@@ -341,6 +362,66 @@ def exchange_openai_code(*, client_id: str, code: str, code_verifier: str, redir
             )
         except HttpError as exc:
             raise OAuthError(str(exc)) from exc
+    return _token_fields(payload)
+
+
+def xai_device_start() -> dict[str, Any]:
+    """Start xAI's published device-code grant. No client secret is sent."""
+    try:
+        payload = request_json(
+            "POST",
+            XAI_DEVICE_URL,
+            form={"client_id": XAI_CLIENT_ID, "scope": XAI_SCOPES},
+            timeout=20,
+        )
+    except HttpError as exc:
+        raise OAuthError(str(exc)) from exc
+    if not isinstance(payload, dict) or not payload.get("device_code") or not payload.get("user_code"):
+        raise OAuthError("xAI did not return a device code.")
+    url = str(payload.get("verification_uri_complete") or payload.get("verification_uri") or "")
+    if not url:
+        raise OAuthError("xAI did not return a verification page.")
+    try:
+        interval = int(payload.get("interval") or 5)
+    except (TypeError, ValueError):
+        interval = 5
+    try:
+        expires_in = int(payload.get("expires_in") or 900)
+    except (TypeError, ValueError):
+        expires_in = 900
+    return {
+        "device_code": str(payload["device_code"]),
+        "user_code": str(payload["user_code"]),
+        "verification_url": url,
+        "interval": max(interval, 1),
+        "expires_in": max(expires_in, 30),
+        "message": "Open the verification page and enter the code. This signs in with your xAI account.",
+    }
+
+
+def xai_device_poll(device_code: str) -> dict[str, Any] | None:
+    try:
+        payload = request_json(
+            "POST",
+            XAI_TOKEN_URL,
+            form={
+                "client_id": XAI_CLIENT_ID,
+                "device_code": device_code,
+                "grant_type": XAI_DEVICE_GRANT,
+            },
+            timeout=20,
+        )
+    except HttpError as exc:
+        message = str(exc)
+        if "authorization_pending" in message:
+            return None
+        if "slow_down" in message:
+            raise OAuthError("slow_down") from exc
+        if "access_denied" in message or "authorization_denied" in message:
+            raise OAuthError("xAI denied the sign-in.") from exc
+        if "expired_token" in message:
+            raise OAuthError("That xAI code expired. Start sign-in again.") from exc
+        raise OAuthError(message) from exc
     return _token_fields(payload)
 
 

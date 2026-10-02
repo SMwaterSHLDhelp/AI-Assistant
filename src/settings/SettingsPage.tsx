@@ -195,7 +195,7 @@ export function SettingsPage() {
     }
   };
 
-  const login = async (flow: "device" | "pkce") => {
+  const login = async (flow: "device" | "pkce" | "setup-token") => {
     if (!draft?.id) {
       setError("Save the provider before signing in");
       return;
@@ -312,7 +312,12 @@ export function SettingsPage() {
           </PanelSectionRow>
           <PanelSectionRow>
             <TextField
-              label="Base URL"
+              label={draft.kind === "claude_code" ? "Bridge URL" : "Base URL"}
+              description={
+                draft.kind === "claude_code"
+                  ? "Leave empty to run Claude Code on this Deck. For a PC on your LAN, use http://that-pc:8765."
+                  : undefined
+              }
               value={draft.base_url}
               onChange={(event) => patchDraft(setDraft, { base_url: event.target.value })}
             />
@@ -334,13 +339,9 @@ export function SettingsPage() {
           </PanelSectionRow>
           <PanelSectionRow>
             <TextField
-              label="API key"
+              label={secretLabel(draft.kind, draft.base_url)}
               bIsPassword
-              description={
-                draft.has_api_key
-                  ? `Saved key ending in ${draft.api_key_last4 || "••••"}. Leave blank to keep it.`
-                  : "Leave blank for local servers that do not need a key."
-              }
+              description={secretDescription(draft.kind, draft.base_url, draft.has_api_key, draft.api_key_last4)}
               value={draft.api_key}
               onChange={(event) => patchDraft(setDraft, { api_key: event.target.value, clear_api_key: false })}
             />
@@ -356,7 +357,85 @@ export function SettingsPage() {
               Remove saved API key
             </ButtonItem>
           ) : null}
-          {kind && kind.oauth !== "none" ? (
+          {kind && kind.oauth === "claude_code" ? (
+            <>
+              <PanelSectionRow>
+                <div>
+                  Install Claude Code on this Deck from the official setup page, then sign in here or with claude login.
+                  Remote mode runs bridge/claude_bridge.py on a PC instead. Use of Claude Code follows Anthropic's terms.
+                </div>
+              </PanelSectionRow>
+              <ButtonItem layout="below" disabled={!draft.id || Boolean(draft.base_url.trim())} onClick={() => void login("setup-token")}>
+                Sign in with setup-token
+              </ButtonItem>
+              {oauth.userCode ? (
+                <PanelSectionRow>
+                  <div>
+                    <div>Code: {oauth.userCode}</div>
+                    <ButtonItem layout="below" onClick={() => void copyText(oauth.userCode)}>
+                      Copy code
+                    </ButtonItem>
+                  </div>
+                </PanelSectionRow>
+              ) : null}
+              {oauth.url ? (
+                <ButtonItem layout="below" onClick={() => Navigation.NavigateToExternalWeb(oauth.url)}>
+                  Open verification page
+                </ButtonItem>
+              ) : null}
+              {oauth.message ? (
+                <PanelSectionRow>
+                  <div>{oauth.message}</div>
+                </PanelSectionRow>
+              ) : null}
+              <ButtonItem layout="below" disabled={!draft.id} onClick={() => void cancelOAuth(draft.id)}>
+                Cancel sign-in
+              </ButtonItem>
+            </>
+          ) : null}
+          {kind && kind.oauth === "xai" ? (
+            <>
+              <PanelSectionRow>
+                <div>
+                  API key from the xAI console, or device-code sign-in for a SuperGrok or X Premium+ account. The
+                  sign-in uses xAI's published device flow and the public Grok CLI client (the same one Hermes Agent
+                  uses). There is no client secret to paste.
+                </div>
+              </PanelSectionRow>
+              <ButtonItem layout="below" disabled={!draft.id} onClick={() => void login("device")}>
+                Sign in with device code
+              </ButtonItem>
+              {oauth.userCode ? (
+                <PanelSectionRow>
+                  <div>
+                    <div>Code: {oauth.userCode}</div>
+                    <ButtonItem layout="below" onClick={() => void copyText(oauth.userCode)}>
+                      Copy code
+                    </ButtonItem>
+                  </div>
+                </PanelSectionRow>
+              ) : null}
+              {oauth.url ? (
+                <ButtonItem layout="below" onClick={() => Navigation.NavigateToExternalWeb(oauth.url)}>
+                  Open verification page
+                </ButtonItem>
+              ) : null}
+              {oauth.message ? (
+                <PanelSectionRow>
+                  <div>{oauth.message}</div>
+                </PanelSectionRow>
+              ) : null}
+              {draft.oauth_connected ? (
+                <PanelSectionRow>
+                  <div>xAI sign-in saved.</div>
+                </PanelSectionRow>
+              ) : null}
+              <ButtonItem layout="below" disabled={!draft.id} onClick={() => void cancelOAuth(draft.id)}>
+                Cancel sign-in
+              </ButtonItem>
+            </>
+          ) : null}
+          {kind && kind.oauth !== "none" && kind.oauth !== "claude_code" && kind.oauth !== "xai" ? (
             <>
               <PanelSectionRow>
                 <TextField
@@ -497,6 +576,30 @@ function blankDraft(kind: ProviderKindInfo): Draft {
 
 function labelFor(catalog: ProviderKindInfo[], kind: string): string {
   return catalog.find((item) => item.kind === kind)?.label || kind;
+}
+
+function secretLabel(kind: string, baseUrl: string): string {
+  if (kind === "claude_code") {
+    return baseUrl.trim() ? "Bridge shared secret" : "Claude Code token";
+  }
+  return "API key";
+}
+
+function secretDescription(kind: string, baseUrl: string, hasSecret: boolean, last4: string): string {
+  const saved = hasSecret ? `Saved value ending in ${last4 || "••••"}. Leave blank to keep it. ` : "";
+  if (kind === "claude_code" && baseUrl.trim()) {
+    return `${saved}The secret you gave bridge/claude_bridge.py. This is not the Claude token.`;
+  }
+  if (kind === "claude_code") {
+    return `${saved}Optional if this Deck is already signed in with claude login. Sign in below, or paste the token from claude setup-token.`;
+  }
+  if (kind === "xai") {
+    return `${saved}From the xAI console. Leave blank if you sign in with the device code instead.`;
+  }
+  if (hasSecret) {
+    return `Saved key ending in ${last4 || "••••"}. Leave blank to keep it.`;
+  }
+  return "Leave blank for local servers that do not need a key.";
 }
 
 function patchDraft(setDraft: (updater: (prev: Draft | null) => Draft | null) => void, patch: Partial<Draft>) {

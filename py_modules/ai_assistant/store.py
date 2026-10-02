@@ -281,6 +281,7 @@ class Store:
                     item["messages"] = []
                     item["title"] = "New chat"
                     item["updated_at"] = int(time.time())
+                    item.pop("claude_session_id", None)
                     self.save_sessions(data)
                     return item
             raise ValueError("That conversation no longer exists")
@@ -321,6 +322,30 @@ class Store:
                 match["title"] = (title[:48] + "…") if len(title) > 48 else title or "New chat"
             self.save_sessions(data)
             return message
+
+    def set_api_key(self, provider_id: str, api_key: str) -> None:
+        with self._lock:
+            config = self.load_config()
+            found = False
+            for item in config["providers"]:
+                if item.get("id") == provider_id:
+                    item["api_key"] = api_key.strip()
+                    found = True
+            if not found:
+                raise ValueError("That provider no longer exists")
+            self.save_config(config)
+
+    def set_claude_session(self, session_id: str, claude_session_id: str) -> None:
+        cleaned = str(claude_session_id or "").strip()
+        if not cleaned or len(cleaned) > 200 or any(character.isspace() for character in cleaned):
+            return
+        with self._lock:
+            data = self.load_sessions()
+            for item in data["sessions"]:
+                if item.get("id") == session_id:
+                    item["claude_session_id"] = cleaned
+                    self.save_sessions(data)
+                    return
 
 
 def _new_session() -> dict[str, Any]:

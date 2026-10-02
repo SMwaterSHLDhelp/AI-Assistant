@@ -8,6 +8,7 @@ import urllib.parse
 from collections.abc import Iterator
 from typing import Any
 
+from . import claude_code
 from .http_util import HttpError, iter_lines, join_url, request_json
 from .redact import redact
 from .sse import iter_json_lines, iter_sse_json
@@ -23,7 +24,7 @@ def bearer_token(provider: dict[str, Any]) -> str:
 def require_credentials(provider: dict[str, Any]) -> str:
     token = bearer_token(provider)
     kind = provider.get("kind")
-    if kind in {"openai", "anthropic", "gemini", "hermes"} and not token:
+    if kind in {"openai", "anthropic", "gemini", "hermes", "xai"} and not token:
         raise ValueError("Add an API key, or finish OAuth sign-in, before chatting")
     return token
 
@@ -48,6 +49,8 @@ def list_models(provider: dict[str, Any]) -> list[str]:
         "anthropic": _list_anthropic_models,
         "gemini": _list_gemini_models,
         "ollama": _list_ollama_models,
+        "xai": _list_openai_models,
+        "claude_code": claude_code.list_models,
     }
     handler = dispatch.get(kind)
     if handler is None:
@@ -64,7 +67,13 @@ def list_models(provider: dict[str, Any]) -> list[str]:
     return models
 
 
-def iter_text(provider: dict[str, Any], messages: list[dict[str, str]], model: str, cancel: threading.Event) -> Iterator[str]:
+def iter_text(
+    provider: dict[str, Any],
+    messages: list[dict[str, str]],
+    model: str,
+    cancel: threading.Event,
+    meta: dict[str, Any] | None = None,
+) -> Iterator[str]:
     if not model.strip():
         raise ValueError("Choose a model")
     kind = str(provider.get("kind") or "")
@@ -76,10 +85,15 @@ def iter_text(provider: dict[str, Any], messages: list[dict[str, str]], model: s
         "anthropic": _iter_anthropic,
         "gemini": _iter_gemini,
         "ollama": _iter_ollama,
+        "xai": _iter_openai,
+        "claude_code": _iter_claude,
     }
     handler = dispatch.get(kind)
     if handler is None:
         raise ValueError(f"Unknown provider type: {kind}")
+    if kind == "claude_code":
+        yield from _iter_claude(provider, messages, model.strip(), cancel, meta)
+        return
     yield from handler(provider, messages, model.strip(), cancel)
 
 
@@ -129,8 +143,21 @@ def _ids_from_openai_payload(payload: Any) -> list[str]:
     return sorted(set(found))
 
 
+def _xai_http_message(exc: HttpError) -> str:
+    if exc.status == 401:
+        return "xAI rejected the credentials. Check the API key, or sign in again with the device code."
+    if exc.status == 403:
+        return (
+            "xAI refused this request (HTTP 403). Subscription sign-in can be limited by plan "
+            "even after the browser step succeeds. An API key from the xAI console still works."
+        )
+    if exc.status == 429:
+        return "xAI rate limit. Wait and try again, or check the account's usage."
+    return str(exc)
+
+
 def _list_openai_models(provider: dict[str, Any]) -> list[str]:
-    if provider.get("kind") in {"openai", "hermes"}:
+    if provider.get("kind") in {"openai", "hermes", "xai"}:
         require_credentials(provider)
     payload = request_json("GET", join_url(_base(provider), "models"), headers=_auth_headers(provider), timeout=20)
     return _ids_from_openai_payload(payload)
@@ -243,8 +270,18 @@ def _openai_delta(payload: Any) -> str:
     return ""
 
 
+def _iter_claude(
+    provider: dict[str, Any],
+    messages: list[dict[str, str]],
+    model: str,
+    cancel: threading.Event,
+    meta: dict[str, Any] | None,
+) -> Iterator[str]:
+    yield from claude_code.stream_text(provider, messages, model, cancel, meta)
+
+
 def _iter_openai(provider: dict[str, Any], messages: list[dict[str, str]], model: str, cancel: threading.Event) -> Iterator[str]:
-    if provider.get("kind") in {"openai", "hermes"}:
+    if provider.get("kind") in {"openai", "hermes", "xai"}:
         require_credentials(provider)
     token_field = "max_completion_tokens" if provider.get("kind") == "openai" else "max_tokens"
     body = {
@@ -254,17 +291,24 @@ def _iter_openai(provider: dict[str, Any], messages: list[dict[str, str]], model
         token_field: _max_tokens(provider),
     }
     encoded = json.dumps(body).encode("utf-8")
-    lines = iter_lines(
-        "POST",
-        join_url(_base(provider), "chat/completions"),
-        headers=_auth_headers(provider),
-        body=encoded,
-        cancel=cancel,
-    )
-    for event in iter_sse_json(lines):
-        text = _openai_delta(event)
-        if text:
-            yield text
+    timeout = 300 if provider.get("kind") == "xai" else 120
+    try:
+        lines = iter_lines(
+            "POST",
+            join_url(_base(provider), "chat/completions"),
+            headers=_auth_headers(provider),
+            body=encoded,
+            timeout=timeout,
+            cancel=cancel,
+        )
+        for event in iter_sse_json(lines):
+            text = _openai_delta(event)
+            if text:
+                yield text
+    except HttpError as exc:
+        if provider.get("kind") == "xai":
+            raise HttpError(exc.status, _xai_http_message(exc)) from exc
+        raise
 
 
 def _iter_anthropic(provider: dict[str, Any], messages: list[dict[str, str]], model: str, cancel: threading.Event) -> Iterator[str]:

@@ -2,8 +2,6 @@ name: Build plugin
 
 on:
   push:
-    branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -18,8 +16,6 @@ jobs:
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -43,7 +39,7 @@ jobs:
       - name: Lint and test the backend
         run: |
           python -m pip install ruff pytest
-          ruff check main.py py_modules tests
+          ruff check main.py py_modules tests bridge
           python -m pytest -q
 
       - name: Install Decky CLI
@@ -53,17 +49,47 @@ jobs:
           chmod +x "$RUNNER_TEMP/decky"
 
       - name: Build plugin zip
-        run: "$RUNNER_TEMP/decky" plugin build -o "$GITHUB_WORKSPACE/out" .
+        run: |
+          "$RUNNER_TEMP/decky" plugin build -o "$GITHUB_WORKSPACE/out" .
+          zipfile="$(find out -name '*.zip' -print -quit)"
+          test -n "$zipfile"
+          mv "$zipfile" out/AI-Assistant.zip
+
+      - name: Check Decky zip layout
+        run: |
+          python3 - <<'PY'
+          import zipfile
+          archive = zipfile.ZipFile("out/AI-Assistant.zip")
+          names = [name for name in archive.namelist() if name and not name.endswith("/")]
+          roots = {name.split("/", 1)[0] for name in names}
+          if len(roots) != 1:
+              raise SystemExit(f"expected one top-level folder, found {sorted(roots)}")
+          root = next(iter(roots))
+          required = [
+              f"{root}/plugin.json",
+              f"{root}/dist/index.js",
+              f"{root}/main.py",
+              f"{root}/package.json",
+              f"{root}/LICENSE",
+          ]
+          missing = [name for name in required if name not in names]
+          if missing:
+              raise SystemExit("zip is missing: " + ", ".join(missing))
+          print(f"Decky zip layout ok under {root}/")
+          PY
 
       - name: Upload plugin zip
         uses: actions/upload-artifact@v4
         with:
           name: AI-Assistant
-          path: out/*.zip
+          path: out/AI-Assistant.zip
           if-no-files-found: error
 
       - name: Attach zip to the GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: out/*.zip
+          files: out/AI-Assistant.zip
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
