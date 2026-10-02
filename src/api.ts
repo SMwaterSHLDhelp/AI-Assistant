@@ -1,5 +1,13 @@
 import { callable } from "@decky/api";
-import type { AppState, OkResult, ProviderInput, PublicProvider, SessionSummary, VoiceSettings } from "./types";
+import type {
+  AppState,
+  HearingSettings,
+  OkResult,
+  ProviderInput,
+  PublicProvider,
+  SessionSummary,
+  VoiceSettings,
+} from "./types";
 
 export const getState = callable<[], AppState & OkResult>("get_state");
 export const saveProvider = callable<[provider: ProviderInput], OkResult & { provider?: PublicProvider }>(
@@ -39,6 +47,15 @@ export const sendMessage = callable<
 >("send_message");
 export const cancelChat = callable<[requestId: string], OkResult>("cancel_chat");
 export const saveVoice = callable<[settings: Partial<VoiceSettings>], OkResult & { voice?: VoiceSettings }>("save_voice");
+export const saveHearing = callable<[settings: Partial<HearingSettings>], OkResult & { hearing?: HearingSettings }>(
+  "save_hearing",
+);
+export const pushToTalk = callable<[], OkResult & { hearing?: HearingSettings }>("push_to_talk");
+export const stopListening = callable<[], OkResult & { hearing?: HearingSettings }>("stop_listening");
+export const setHearingActivity = callable<
+  [gameRunning: boolean, sleeping: boolean],
+  OkResult & { hearing?: HearingSettings }
+>("set_hearing_activity");
 export const testVoice = callable<[], OkResult & { voice?: VoiceSettings; warning?: string }>("test_voice");
 export const stopSpeaking = callable<[], OkResult>("stop_speaking");
 export const retryKitten = callable<[], OkResult & { voice?: VoiceSettings }>("retry_kitten");

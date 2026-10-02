@@ -89,6 +89,18 @@ class Plugin:
     async def cancel_chat(self, request_id: str) -> dict:
         return self._call(self.service.cancel_chat, request_id)
 
+    async def save_hearing(self, settings: dict) -> dict:
+        return self._call(self.service.save_hearing, settings)
+
+    async def push_to_talk(self) -> dict:
+        return self._call(self.service.push_to_talk)
+
+    async def stop_listening(self) -> dict:
+        return self._call(self.service.stop_listening)
+
+    async def set_hearing_activity(self, game_running: bool, sleeping: bool) -> dict:
+        return self._call(self.service.set_hearing_activity, game_running, sleeping)
+
     async def save_voice(self, settings: dict) -> dict:
         return self._call(self.service.save_voice, settings)
 

@@ -48,6 +48,47 @@ export interface VoiceSettings {
   kitten_voices: string[];
 }
 
+export interface HearingSettings {
+  wake_enabled: boolean;
+  sensitivity: number;
+  wake_model: string;
+  stt_model: string;
+  ptt_enabled: boolean;
+  battery_saver: boolean;
+  debug_audio: boolean;
+  wake_error: string;
+  stt_backend: string;
+  install_message: string;
+  phase: string;
+  wake_models: { id: string; label: string }[];
+  stt_models: string[];
+  idle_note: string;
+}
+
+export function defaultHearing(): HearingSettings {
+  return {
+    wake_enabled: false,
+    sensitivity: 0.5,
+    wake_model: "hey_jarvis",
+    stt_model: "tiny.en",
+    ptt_enabled: true,
+    battery_saver: false,
+    debug_audio: false,
+    wake_error: "",
+    stt_backend: "",
+    install_message: "",
+    phase: "off",
+    wake_models: [
+      { id: "hey_jarvis", label: "hey jarvis" },
+      { id: "alexa", label: "alexa" },
+      { id: "hey_mycroft", label: "hey mycroft" },
+      { id: "hey_rhasspy", label: "hey rhasspy" },
+    ],
+    stt_models: ["tiny.en", "base.en"],
+    idle_note: "The speech model closes after each line.",
+  };
+}
+
 export function defaultVoice(): VoiceSettings {
   return {
     voice_enabled: false,
@@ -78,6 +119,7 @@ export interface AppState {
   sessions: SessionSummary[];
   messages: ChatMessage[];
   voice: VoiceSettings;
+  hearing: HearingSettings;
 }
 
 export interface ProviderInput {
@@ -109,6 +151,10 @@ export type BackendEvent = {
   flow?: string;
   suggestions?: string[];
   vision?: boolean;
+  phase?: string;
+  transcript?: string;
+  action?: string;
+  progress?: number;
 };
 
 export interface OkResult {

@@ -17,18 +17,22 @@ import {
   listModels,
   lookAtScreen,
   newSession,
+  pushToTalk,
   saveLastScreenshot,
   sendMessage,
+  setHearingActivity,
+  stopListening,
   stopSpeaking,
   switchSession,
 } from "../api";
 import { componentReady, fieldValue, optionData } from "../form";
+import { bindHearingChord, bindSleep } from "../hearing";
 import { ModelPicker } from "../ModelPicker";
 import { errorMessage, sleep, withRetry } from "../retry";
 import { bindScreenChord, prepareScreenCapture, trySteamScreenshot, wantsScreenLook } from "../screenHelp";
 import { copyText, newRequestId, runningGameName } from "../steam";
 import type { AppState, BackendEvent, ChatMessage } from "../types";
-import { defaultVoice } from "../types";
+import { defaultHearing, defaultVoice } from "../types";
 
 const emptyState = (): AppState => ({
   catalog: [],
@@ -40,6 +44,7 @@ const emptyState = (): AppState => ({
   sessions: [],
   messages: [],
   voice: defaultVoice(),
+  hearing: defaultHearing(),
 });
 
 export function ChatPanel() {
@@ -61,6 +66,7 @@ export function ChatPanel() {
   const requestRef = useRef<string | null>(null);
   const sessionRef = useRef("");
   const lookRef = useRef<(question?: string) => Promise<void>>(async () => {});
+  const sleepingRef = useRef(false);
 
   useEffect(() => {
     sessionRef.current = state.current_session_id;
@@ -108,6 +114,54 @@ export function ChatPanel() {
         setError(event.error || "The provider returned an error");
         return;
       }
+      if (event.type === "hearing") {
+        if (event.phase) {
+          setState((prev) => ({
+            ...prev,
+            hearing: {
+              ...prev.hearing,
+              phase: event.phase || prev.hearing.phase,
+              install_message:
+                event.phase === "install" ? event.message || prev.hearing.install_message : prev.hearing.install_message,
+            },
+          }));
+        }
+        if (event.phase === "toast" && event.message) {
+          toaster.toast({ title: "Deckling", body: event.message, duration: 2000 });
+        }
+        if (event.phase === "sending" && event.request_id) {
+          requestRef.current = event.request_id;
+          setStreaming(true);
+          const transcript = event.transcript || event.message || "";
+          if (transcript) {
+            setState((prev) => ({
+              ...prev,
+              messages: [
+                ...prev.messages,
+                {
+                  id: `voice-${event.request_id}`,
+                  role: "user",
+                  content: transcript,
+                  created_at: Date.now() / 1000,
+                },
+              ],
+            }));
+          }
+        }
+        if (event.phase === "screen" && event.transcript) {
+          void lookRef.current(event.transcript);
+        }
+        if (event.phase === "cancelled") {
+          setStreaming(false);
+          requestRef.current = null;
+          void getState().then((loaded) => {
+            if (loaded.ok) {
+              setState((prev) => ({ ...prev, messages: loaded.messages, sessions: loaded.sessions }));
+            }
+          });
+        }
+        return;
+      }
       if (event.type === "speech") {
         setSpeaking(event.status === "started");
         if (event.status === "error" && event.error) {
@@ -130,7 +184,11 @@ export function ChatPanel() {
             return;
           }
           if (loaded.ok) {
-            setState({ ...loaded, voice: { ...defaultVoice(), ...(loaded.voice || {}) } });
+            setState({
+              ...loaded,
+              voice: { ...defaultVoice(), ...(loaded.voice || {}) },
+              hearing: { ...defaultHearing(), ...(loaded.hearing || {}) },
+            });
             const initial = loaded.default_provider_id || loaded.providers[0]?.id || "";
             setProviderId(initial);
             const provider = loaded.providers.find((item) => item.id === initial);
@@ -145,6 +203,7 @@ export function ChatPanel() {
               ...prev,
               ...loaded,
               voice: { ...defaultVoice(), ...(loaded.voice || prev.voice) },
+              hearing: { ...defaultHearing(), ...(loaded.hearing || prev.hearing) },
             }));
           }
         } catch (err) {
@@ -165,6 +224,25 @@ export function ChatPanel() {
   }, []);
 
   useEffect(() => bindScreenChord(() => void lookRef.current()), []);
+
+  useEffect(() => {
+    const offChord = bindHearingChord(() => {
+      void pushToTalk();
+    });
+    const offSleep = bindSleep((sleeping) => {
+      sleepingRef.current = sleeping;
+      void setHearingActivity(Boolean(runningGameName()), sleeping);
+    });
+    const timer = window.setInterval(() => {
+      void setHearingActivity(Boolean(runningGameName()), sleepingRef.current);
+    }, 5000);
+    void setHearingActivity(Boolean(runningGameName()), sleepingRef.current);
+    return () => {
+      offChord();
+      offSleep();
+      window.clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     const timer = window.setInterval(() => setGame(runningGameName()), 2000);
@@ -318,6 +396,19 @@ export function ChatPanel() {
   return (
     <>
       <PanelSection title="Deckling">
+        <PanelSectionRow>
+          <div>
+            {state.hearing.phase === "listening"
+              ? "Mic: listening for the wake word"
+              : state.hearing.phase === "recording"
+                ? "Mic: hearing you"
+                : state.hearing.phase === "transcribing"
+                  ? "Mic: transcribing"
+                  : state.hearing.phase === "paused"
+                    ? "Mic: paused"
+                    : "Mic: off"}
+          </div>
+        </PanelSectionRow>
         {loading ? (
           <PanelSectionRow>
             <div>Loading…</div>
@@ -499,6 +590,30 @@ export function ChatPanel() {
         >
           Look at my screen
         </ButtonItem>
+        {state.hearing.ptt_enabled ? (
+          <ButtonItem
+            layout="below"
+            disabled={streaming}
+            description="Steam + X does this too when the controller API is available."
+            onClick={() => void pushToTalk()}
+          >
+            Push to talk
+          </ButtonItem>
+        ) : null}
+        {state.hearing.wake_enabled ? (
+          <ButtonItem
+            layout="below"
+            onClick={() =>
+              void stopListening().then((result) => {
+                if (result.hearing) {
+                  setState((prev) => ({ ...prev, hearing: { ...prev.hearing, ...result.hearing } }));
+                }
+              })
+            }
+          >
+            Stop listening
+          </ButtonItem>
+        ) : null}
         {speaking && !streaming ? (
           <ButtonItem layout="below" onClick={() => void stop()}>
             Stop speaking

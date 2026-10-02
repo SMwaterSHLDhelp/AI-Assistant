@@ -6,6 +6,14 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [Unreleased]
 
+## [0.1.0-rc.5] - 2026-10-02
+
+### Added
+
+- Voice control, off until the wake word is enabled. hey jarvis is the default and downloads on first use, along with alexa, hey mycroft, and hey rhasspy. A custom hey deckling model is not included. Sensitivity, push to talk (the Quick Access button and Steam + X), and a pause-during-games switch are in settings. The wake word uses openWakeWord 0.4 on ONNX, because newer releases need `tflite-runtime` and that wheel does not install on SteamOS's Python. Speech recognition uses faster-whisper at int8 (`tiny.en` or `base.en`) and falls back to whisper.cpp when that wheel will not install. Models stay in the plugin data directory. The speech process exits after each line.
+- Spoken confirmations. While an answer is waiting for a go-ahead, "go ahead", "yes", and "do it" confirm, and "cancel" or "stop" cancel. "New chat" and "stop listening" work by voice. Screen-help phrases still look at the game.
+- Listening pauses while the Deck is asleep. Microphone audio is local and is not saved unless debug audio is on.
+
 ## [0.1.0-rc.4] - 2026-10-02
 
 ### Fixed

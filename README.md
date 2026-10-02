@@ -12,7 +12,7 @@ Screenshots from a Steam Deck are not in the repo yet. They will replace this pl
 
 | Quick Access chat | Provider settings |
 | --- | --- |
-| _Not captured yet. The panel has a provider and model picker, the conversation, Send, Stop, Ask about the current game, Look at my screen, Save screenshot, Copy, and Clear._ | _Not captured yet. The settings page adds providers, picks a model, and sets voice and screen capture._ |
+| _Not captured yet. The panel has a provider and model picker, the conversation, Send, Stop, Ask about the current game, Look at my screen, Push to talk, Save screenshot, Copy, and Clear._ | _Not captured yet. The settings page adds providers, picks a model, and sets listening, voice, and screen capture._ |
 
 ## Install
 
@@ -239,6 +239,19 @@ Each engine has its own voice buttons, a speed of 0.8, 1, 1.25, or 1.5, and **Te
 
 A speech failure does not fail the chat. The text reply still appears.
 
+## Listening
+
+Wake word and speech recognition are off until you turn **Wake word** on in settings. A custom “hey deckling” model is not included. The choices are the openWakeWord models hey jarvis (the default), alexa, hey mycroft, and hey rhasspy. A sensitivity slider trades missed wake-ups against false ones. **Push to talk** stays available when the wake word is off: the Quick Access button, and Steam + X (guide + X) when that controller API exists. Steam + Y stays the screen chord.
+
+The first time you enable the wake word, or hold push to talk, the plugin downloads models into Decky's data directory. They are not inside `Deckling.zip`.
+
+- The wake word runs in its own process at a lower priority, using openWakeWord 0.4 on ONNX. Later openWakeWord releases need `tflite-runtime`, which has no wheel for SteamOS's current Python, so those releases are not installed. Feature models download with the wake-word file.
+- Speech recognition tries faster-whisper on CPU at int8, with `tiny.en` or `base.en`. If that wheel cannot be installed on SteamOS, the plugin installs a whisper.cpp build instead and says so in settings. Push to talk still works when the wake word itself cannot be installed.
+- Recording uses the Deck user's PipeWire or PulseAudio session (`parec`, `pw-record`, or `pw-cat`), including when Deckling's backend is root. Each line ends after a short silence. The speech process exits after that line, so the model is not kept in memory.
+- Listening pauses while the Deck is asleep. **Pause while a game is running** does the same during a game. The Quick Access row shows whether the mic is listening, hearing you, transcribing, paused, or off.
+
+After the chime, the transcript is sent to the provider you selected. While the assistant is waiting for a go-ahead, you can say "go ahead", "yes", or "do it" to confirm, and "cancel" or "stop" to cancel. "New chat" and "stop listening" work by voice. Phrases such as "what am I looking at" still use screen help.
+
 ## Looking at the screen
 
 Ask "how do I do this", "what am I looking at", "help me with this", or "what should I do here" (and a few close variants such as "look at my screen"). You can also press **Look at my screen**. On a Deck whose Steam client exposes controller registration, Steam + Y (guide + Y) does the same thing. If that API is missing, the button still works.
@@ -266,6 +279,7 @@ The answer uses a short Jarvis-style prompt: a few spoken sentences, friendly, a
 
 - Chat text is sent only to the provider URL you configured. This plugin has no separate telemetry server.
 - A screen-help screenshot is sent only to that same provider, only when you ask about the screen, and only if screen capture is enabled. It is not written into `sessions.json`. It stays on disk only if you press **Save screenshot**.
+- The microphone stays on this Deck. Wake-word scores and transcripts are computed locally. Audio is discarded after each line unless **Debug audio** is on. Those recordings are mode `0600` under the plugin data directory.
 - API keys, OAuth client secrets, access tokens, and refresh tokens live in `credentials.json` under Decky's settings directory for this plugin. The directory is mode `0700` and the file is mode `0600`.
 - Conversations live in `sessions.json` under Decky's runtime data directory, also mode `0600`.
 - Logs record the provider type, model id, and status. A log filter redacts bearer tokens, `sk-` keys, Google API keys, and similar strings. Authorization headers are not logged. OAuth callback URLs are not logged, because they contain one-time codes.
@@ -312,6 +326,7 @@ This repository's automation token cannot change security settings. An admin nee
 
 - Submission to the Decky plugin store.
 - Screenshots taken on a Deck.
+- Wake-word accuracy, the Deck microphone, and idle CPU while listening, measured on SteamOS. The tests here use synthetic audio and a stubbed installer.
 - General file attachments. Screen help sends one JPEG for that question and does not keep a gallery.
 - More than one streaming reply at a time.
 - A way to spend a ChatGPT Plus subscription. OpenAI does not offer that to third-party clients, and this plugin does not reuse the Codex client ID.

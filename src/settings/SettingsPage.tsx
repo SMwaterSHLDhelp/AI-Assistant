@@ -6,8 +6,9 @@ import { PROVIDER_KINDS, kindInfo } from "../catalog";
 import { fieldValue } from "../form";
 import { errorMessage, sleep, withRetry } from "../retry";
 import type { AppState, OkResult, PublicProvider } from "../types";
-import { defaultVoice } from "../types";
+import { defaultHearing, defaultVoice } from "../types";
 import { ProviderEditor, blankDraft, draftFromProvider } from "./ProviderEditor";
+import { HearingSection } from "./HearingSection";
 import { VoiceSection } from "./VoiceSection";
 
 const emptyState = (): AppState => ({
@@ -20,6 +21,7 @@ const emptyState = (): AppState => ({
   sessions: [],
   messages: [],
   voice: defaultVoice(),
+  hearing: defaultHearing(),
 });
 
 export function SettingsPage() {
@@ -44,6 +46,7 @@ export function SettingsPage() {
       sessions: loaded.sessions ?? prev.sessions,
       messages: loaded.messages ?? prev.messages,
       voice: { ...defaultVoice(), ...(loaded.voice || prev.voice) },
+      hearing: { ...defaultHearing(), ...(loaded.hearing || prev.hearing) },
     }));
   };
 
@@ -137,6 +140,12 @@ export function SettingsPage() {
           setError("");
           setNotice(message);
         }}
+        onError={report}
+      />
+
+      <HearingSection
+        hearing={state.hearing}
+        onHearing={(hearing) => setState((prev) => ({ ...prev, hearing }))}
         onError={report}
       />
 

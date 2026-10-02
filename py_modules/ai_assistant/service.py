@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from . import claude_code, oauth, providers
 from .catalog import catalog_payload, get_kind
 from .claude_code import ClaudeCodeError
+from .hearing import HearingEngine
 from .http_util import HttpError
 from .imageutil import to_jpeg
 from .oauth import OAuthError
@@ -49,7 +50,12 @@ def _fail(message: str) -> dict[str, Any]:
     return {"ok": False, "error": redact(message)}
 
 
-def _state_error(catalog: list[dict[str, str]], message: str, voice: dict[str, Any]) -> dict[str, Any]:
+def _state_error(
+    catalog: list[dict[str, str]],
+    message: str,
+    voice: dict[str, Any],
+    hearing: dict[str, Any],
+) -> dict[str, Any]:
     return {
         "ok": False,
         "error": redact(message),
@@ -62,6 +68,7 @@ def _state_error(catalog: list[dict[str, str]], message: str, voice: dict[str, A
         "sessions": [],
         "messages": [],
         "voice": voice,
+        "hearing": hearing,
     }
 
 
@@ -87,6 +94,18 @@ class AssistantService:
         self._oauth: dict[str, dict[str, Any]] = {}
         self._oauth_cancel: dict[str, threading.Event] = {}
         self.voice = VoiceEngine(self.store)
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+        self.hearing = HearingEngine(
+            self.store,
+            notify=self._hearing_notify,
+            on_command=self._hearing_command,
+            pending=self._hearing_pending,
+        )
+        if self.hearing.public()["wake_enabled"]:
+            self.hearing.start()
         self.screen_grabbers = None
         self._last_jpeg: bytes | None = None
 
@@ -94,15 +113,16 @@ class AssistantService:
         # The catalog is static data. A broken settings or chat file must not hide it.
         catalog = catalog_payload()
         voice = self.voice.public()
+        hearing = self.hearing.public()
         try:
             config = self.store.load_config()
         except (OSError, ValueError) as exc:
-            return _state_error(catalog, f"Could not read saved settings: {exc}", voice)
+            return _state_error(catalog, f"Could not read saved settings: {exc}", voice, hearing)
         try:
             sessions, current = self.store.ensure_session()
         except (OSError, ValueError) as exc:
             return {
-                **_state_error(catalog, f"Could not read saved chats: {exc}", voice),
+                **_state_error(catalog, f"Could not read saved chats: {exc}", voice, hearing),
                 "providers": [public_provider(item) for item in config.get("providers") or []],
                 "default_provider_id": config.get("default_provider_id") or "",
                 "default_model": config.get("default_model") or "",
@@ -119,6 +139,7 @@ class AssistantService:
             "sessions": [public_session_summary(item) for item in sessions["sessions"]],
             "messages": list(current.get("messages") or []),
             "voice": voice,
+            "hearing": hearing,
         }
 
     def save_provider(self, incoming: dict[str, Any]) -> dict[str, Any]:
@@ -239,6 +260,97 @@ class AssistantService:
             return {"ok": True, "message": "Nothing to stop"}
         cancel.set()
         return {"ok": True}
+
+    def save_hearing(self, settings: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(settings, dict):
+            raise ValueError("Listening settings must be an object")
+        return {"ok": True, "hearing": self.hearing.update(settings)}
+
+    def push_to_talk(self) -> dict[str, Any]:
+        if not self.hearing.public()["ptt_enabled"]:
+            return _fail("Push to talk is turned off in settings.")
+        self.voice.stop()
+        self.hearing.begin_ptt()
+        return {"ok": True, "hearing": self.hearing.public()}
+
+    def stop_listening(self) -> dict[str, Any]:
+        self.hearing.update({"wake_enabled": False})
+        self.hearing.stop()
+        return {"ok": True, "hearing": self.hearing.public()}
+
+    def set_hearing_activity(self, game_running: bool, sleeping: bool) -> dict[str, Any]:
+        return {"ok": True, "hearing": self.hearing.set_activity(bool(game_running), bool(sleeping))}
+
+    def _hearing_notify(self, payload: dict[str, Any]) -> None:
+        loop = getattr(self, "_loop", None)
+        if loop is None or not loop.is_running():
+            return
+        asyncio.run_coroutine_threadsafe(self._emit(payload), loop)
+
+    def _hearing_pending(self) -> bool:
+        if self._streams:
+            return True
+        try:
+            _sessions, current = self.store.ensure_session()
+        except (OSError, ValueError):
+            return False
+        for message in reversed(current.get("messages") or []):
+            if message.get("role") != "assistant":
+                continue
+            text = str(message.get("content") or "")
+            lowered = text.lower()
+            cues = ("should i", "shall i", "go ahead", "do you want", "want me to")
+            return "?" in text and any(cue in lowered for cue in cues)
+        return False
+
+    def _hearing_command(self, action: str, text: str) -> None:
+        if action == "new_chat":
+            self.new_session()
+            self._hearing_notify({"type": "hearing", "phase": "idle", "message": "New chat"})
+            return
+        if action == "cancel":
+            self.voice.stop()
+            for cancel in list(self._streams.values()):
+                cancel.set()
+            try:
+                _sessions, current = self.store.ensure_session()
+                self.store.append_message(current["id"], "assistant", "Cancelled.")
+            except (OSError, ValueError):
+                return
+            self._hearing_notify({"type": "hearing", "phase": "cancelled", "message": "Cancelled."})
+            return
+        if action == "screen":
+            self._hearing_notify({"type": "hearing", "phase": "screen", "transcript": text, "message": text})
+            return
+        if action in {"confirm", "message"}:
+            self._submit_voice(text)
+
+    def _submit_voice(self, text: str) -> None:
+        config = self.store.load_config()
+        provider_id = str(config.get("default_provider_id") or "")
+        if not provider_id:
+            providers_saved = config.get("providers") or []
+            if providers_saved:
+                provider_id = str(providers_saved[0].get("id") or "")
+        model = str(config.get("default_model") or "")
+        request_id = secrets.token_hex(8)
+        self._hearing_notify(
+            {"type": "hearing", "phase": "sending", "transcript": text, "request_id": request_id, "message": text}
+        )
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            self._hearing_notify(
+                {"type": "hearing", "phase": "error", "message": "Deckling cannot send a voice message yet."}
+            )
+            return
+
+        async def run() -> None:
+            try:
+                self.start_chat(provider_id, model, text, request_id, "")
+            except Exception as exc:  # noqa: BLE001 - the chat panel shows this
+                await self._emit({"type": "chat_error", "request_id": request_id, "error": redact(str(exc))})
+
+        asyncio.run_coroutine_threadsafe(run(), loop)
 
     def save_voice(self, settings: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(settings, dict):
@@ -376,6 +488,7 @@ class AssistantService:
 
     async def shutdown(self) -> None:
         self.voice.stop()
+        self.hearing.stop()
         for cancel in list(self._streams.values()):
             cancel.set()
         for cancel in list(self._oauth_cancel.values()):

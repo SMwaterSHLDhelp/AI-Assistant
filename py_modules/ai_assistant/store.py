@@ -91,6 +91,40 @@ def normalize_voice(raw: Any) -> dict[str, Any]:
     return voice
 
 
+def normalize_hearing(raw: Any) -> dict[str, Any]:
+    hearing = {
+        "wake_enabled": False,
+        "sensitivity": 0.5,
+        "wake_model": "hey_jarvis",
+        "stt_model": "tiny.en",
+        "ptt_enabled": True,
+        "battery_saver": False,
+        "debug_audio": False,
+        "wake_error": "",
+        "stt_backend": "",
+        "install_message": "",
+    }
+    if isinstance(raw, dict):
+        for key in hearing:
+            if key in raw:
+                hearing[key] = raw[key]
+    hearing["wake_enabled"] = bool(hearing["wake_enabled"])
+    hearing["ptt_enabled"] = bool(hearing["ptt_enabled"])
+    hearing["battery_saver"] = bool(hearing["battery_saver"])
+    hearing["debug_audio"] = bool(hearing["debug_audio"])
+    try:
+        sensitivity = float(hearing["sensitivity"])
+    except (TypeError, ValueError):
+        sensitivity = 0.5
+    hearing["sensitivity"] = max(0.0, min(1.0, sensitivity))
+    hearing["wake_model"] = str(hearing["wake_model"] or "hey_jarvis")[:40]
+    hearing["stt_model"] = str(hearing["stt_model"] or "tiny.en")[:40]
+    hearing["wake_error"] = str(hearing["wake_error"] or "")[:500]
+    hearing["stt_backend"] = str(hearing["stt_backend"] or "")[:40]
+    hearing["install_message"] = str(hearing["install_message"] or "")[:500]
+    return hearing
+
+
 def _blank_sessions() -> dict[str, Any]:
     return {"version": 1, "current_id": "", "sessions": []}
 
@@ -254,6 +288,20 @@ class Store:
             config["voice"] = voice
             self.save_config(config)
             return voice
+
+    def update_hearing(self, patch: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(patch, dict):
+            raise ValueError("Listening settings must be an object")
+        with self._lock:
+            config = self.load_config()
+            hearing = normalize_hearing(config.get("hearing"))
+            for key in hearing:
+                if key in patch:
+                    hearing[key] = patch[key]
+            hearing = normalize_hearing(hearing)
+            config["hearing"] = hearing
+            self.save_config(config)
+            return hearing
 
     def set_oauth_tokens(
         self,
