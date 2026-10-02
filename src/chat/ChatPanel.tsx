@@ -12,6 +12,8 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { cancelChat, clearSession, getState, listModels, newSession, sendMessage, switchSession } from "../api";
 import { componentReady, fieldValue, optionData } from "../form";
+import { ModelPicker } from "../ModelPicker";
+import { errorMessage, sleep, withRetry } from "../retry";
 import { copyText, newRequestId, runningGameName } from "../steam";
 import type { AppState, BackendEvent, ChatMessage } from "../types";
 
@@ -35,6 +37,10 @@ export function ChatPanel() {
   const [error, setError] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [game, setGame] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState("");
+  const [modelReload, setModelReload] = useState(0);
   const requestRef = useRef<string | null>(null);
   const sessionRef = useRef("");
 
@@ -88,18 +94,45 @@ export function ChatPanel() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
-      const loaded = await getState();
-      if (!loaded.ok) {
-        setError(loaded.error || "Could not load AI Assistant");
-        return;
+      setLoading(true);
+      let lastError = "Could not load AI Assistant";
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const loaded = await withRetry(() => getState(), 1);
+          if (cancelled) {
+            return;
+          }
+          if (loaded.ok) {
+            setState(loaded);
+            const initial = loaded.default_provider_id || loaded.providers[0]?.id || "";
+            setProviderId(initial);
+            const provider = loaded.providers.find((item) => item.id === initial);
+            setModel(loaded.default_model || provider?.default_model || "");
+            setError("");
+            setLoading(false);
+            return;
+          }
+          lastError = loaded.error || lastError;
+          if (loaded.providers) {
+            setState((prev) => ({ ...prev, ...loaded }));
+          }
+        } catch (err) {
+          lastError = errorMessage(err, lastError);
+        }
+        if (attempt < 2) {
+          await sleep(400 * (attempt + 1));
+        }
       }
-      setState(loaded);
-      const initial = loaded.default_provider_id || loaded.providers[0]?.id || "";
-      setProviderId(initial);
-      const provider = loaded.providers.find((item) => item.id === initial);
-      setModel(loaded.default_model || provider?.default_model || "");
+      if (!cancelled) {
+        setLoading(false);
+        setError(lastError);
+      }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -114,22 +147,41 @@ export function ChatPanel() {
       return;
     }
     let cancelled = false;
+    setModelsLoading(true);
+    setModelsError("");
     void (async () => {
-      const result = await listModels(providerId);
-      if (!cancelled && result.ok && result.models) {
-        setModels(result.models);
+      try {
+        const result = await withRetry(() => listModels(providerId), 2);
+        if (cancelled) {
+          return;
+        }
+        if (!result.ok) {
+          setModelsError(result.error || "Could not list models");
+          setModels([]);
+          return;
+        }
+        const found = result.models || [];
+        setModels(found);
+        setModel((current) => current || found[0] || "");
+      } catch (err) {
+        if (!cancelled) {
+          setModelsError(errorMessage(err, "Could not list models"));
+        }
+      } finally {
+        if (!cancelled) {
+          setModelsLoading(false);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [providerId]);
+  }, [providerId, modelReload]);
 
   const providerOptions = state.providers.map((item) => ({
     label: item.name,
     data: item.id,
   }));
-  const modelOptions = uniqueModels(models, model).map((item) => ({ label: item, data: item }));
   const sessionOptions = state.sessions.map((item) => ({
     label: item.title || "New chat",
     data: item.id,
@@ -179,6 +231,11 @@ export function ChatPanel() {
   return (
     <>
       <PanelSection title="AI Assistant">
+        {loading ? (
+          <PanelSectionRow>
+            <div>Loading…</div>
+          </PanelSectionRow>
+        ) : null}
         {state.providers.length === 0 ? (
           <PanelSectionRow>
             <div>Add a provider to start chatting.</div>
@@ -215,19 +272,15 @@ export function ChatPanel() {
                 </ButtonItem>
               ))
             )}
-            {modelOptions.length > 0 && componentReady(DropdownItem) ? (
-              <DropdownItem
-                label="Model"
-                menuLabel="Model"
-                childrenContainerWidth="min"
-                rgOptions={modelOptions}
-                selectedOption={model || modelOptions[0].data}
-                onChange={(option) => setModel(optionData(option))}
-              />
-            ) : null}
-            <PanelSectionRow>
-              <TextField label="Model id" value={model} onChange={(event) => setModel(fieldValue(event))} />
-            </PanelSectionRow>
+            <ModelPicker
+              label="Model id"
+              models={models}
+              value={model}
+              onChange={setModel}
+              onRefresh={() => setModelReload((value) => value + 1)}
+              loading={modelsLoading}
+              error={modelsError}
+            />
           </>
         )}
         {sessionOptions.length > 0 && componentReady(DropdownItem) ? (
@@ -404,11 +457,6 @@ function lastAssistant(messages: ChatMessage[]): string {
     }
   }
   return "";
-}
-
-function uniqueModels(models: string[], current: string): string[] {
-  const values = current ? [current, ...models] : models;
-  return [...new Set(values.filter((item) => item))];
 }
 
 async function refreshSession(

@@ -9,20 +9,24 @@ import {
   TextField,
   showModal,
 } from "@decky/ui";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   cancelOAuth,
   deleteProvider,
   getState,
+  listModels,
   oauthStatus,
   saveProvider,
   saveSettings,
   startOAuth,
   testProvider,
 } from "../api";
+import { PROVIDER_KINDS, kindInfo } from "../catalog";
 import { fieldValue } from "../form";
+import { ModelPicker } from "../ModelPicker";
+import { errorMessage, sleep, withRetry } from "../retry";
 import { copyText } from "../steam";
-import type { AppState, BackendEvent, ProviderInput, ProviderKindInfo, PublicProvider } from "../types";
+import type { AppState, BackendEvent, OkResult, ProviderInput, ProviderKindInfo, PublicProvider } from "../types";
 
 const emptyState = (): AppState => ({
   catalog: [],
@@ -59,26 +63,53 @@ export function SettingsPage() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [oauth, setOauth] = useState({ status: "", message: "", userCode: "", url: "" });
+  const [loading, setLoading] = useState(true);
+  const [modelChoices, setModelChoices] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState("");
+  const [modelReload, setModelReload] = useState(0);
+  const savedRef = useRef({ id: "", name: "", base_url: "" });
 
   const report = (message: string) => {
     setError(message);
     toaster.toast({ title: "AI Assistant", body: message, duration: 6000 });
   };
 
+  const applyLoaded = (loaded: Partial<AppState> & OkResult) => {
+    setState((prev) => ({
+      ...prev,
+      providers: loaded.providers ?? prev.providers,
+      default_provider_id: loaded.default_provider_id ?? prev.default_provider_id,
+      default_model: loaded.default_model ?? prev.default_model,
+      system_prompt: loaded.system_prompt ?? prev.system_prompt,
+      current_session_id: loaded.current_session_id ?? prev.current_session_id,
+      sessions: loaded.sessions ?? prev.sessions,
+      messages: loaded.messages ?? prev.messages,
+    }));
+  };
+
   const load = async () => {
-    try {
-      const loaded = await getState();
-      if (!loaded.ok) {
-        report(loaded.error || "Could not load settings");
-        return;
+    setLoading(true);
+    let lastError = "Could not load settings";
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const loaded = await withRetry(() => getState(), 1);
+        applyLoaded(loaded);
+        if (loaded.ok) {
+          setError("");
+          setLoading(false);
+          return;
+        }
+        lastError = loaded.error || lastError;
+      } catch (err) {
+        lastError = errorMessage(err, lastError);
       }
-      setState(loaded);
-      if (!loaded.catalog || loaded.catalog.length === 0) {
-        report("The provider list came back empty. Reopen settings, or reload the plugin.");
+      if (attempt < 2) {
+        await sleep(400 * (attempt + 1));
       }
-    } catch (err) {
-      report(err instanceof Error ? err.message : "Could not load settings");
     }
+    setLoading(false);
+    report(lastError);
   };
 
   useEffect(() => {
@@ -100,15 +131,13 @@ export function SettingsPage() {
     return () => removeEventListener("ai_assistant_event", listener);
   }, []);
 
-  const kind = state.catalog.find((item) => item.kind === draft?.kind);
+  const kind = kindInfo(draft?.kind || "");
 
   const beginCreate = () => {
-    const first = state.catalog[0];
-    if (!first) {
-      report("Provider types have not loaded yet. Reopen settings and try Add provider again.");
-      return;
-    }
-    setDraft(blankDraft(first));
+    setDraft(blankDraft(PROVIDER_KINDS[0]));
+    savedRef.current = { id: "", name: "", base_url: "" };
+    setModelChoices([]);
+    setModelsError("");
     setNotice("");
     setError("");
     setOauth({ status: "", message: "", userCode: "", url: "" });
@@ -119,7 +148,7 @@ export function SettingsPage() {
       if (!prev) {
         return blankDraft(nextKind);
       }
-      const previous = state.catalog.find((item) => item.kind === prev.kind);
+      const previous = kindInfo(prev.kind);
       return {
         ...prev,
         kind: nextKind.kind,
@@ -153,6 +182,7 @@ export function SettingsPage() {
       has_oauth_secret: provider.has_oauth_secret,
       oauth_connected: provider.oauth_connected,
     });
+    savedRef.current = { id: provider.id, name: provider.name, base_url: provider.base_url };
     setNotice("");
     setError("");
     void oauthStatus(provider.id).then((result) => {
@@ -203,6 +233,7 @@ export function SettingsPage() {
     setNotice("Provider saved. Keys stay in the plugin settings folder and are not shown again.");
     await load();
     beginEdit(result.provider);
+    setModelReload((value) => value + 1);
   };
 
   const saveDefaults = async () => {
@@ -243,8 +274,12 @@ export function SettingsPage() {
     }
     setError("");
     setNotice(result.message || "Connected");
-    if (result.models && result.models.length > 0 && !draft.default_model) {
-      setDraft({ ...draft, default_model: result.models[0] });
+    if (result.models && result.models.length > 0) {
+      setModelChoices(result.models);
+      setModelsError("");
+      if (!draft.default_model) {
+        setDraft({ ...draft, default_model: result.models[0] });
+      }
     }
   };
 
@@ -274,6 +309,66 @@ export function SettingsPage() {
     });
   };
 
+  useEffect(() => {
+    const providerId = draft?.id || "";
+    if (!providerId) {
+      setModelChoices([]);
+      setModelsError("");
+      setModelsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setModelsLoading(true);
+    setModelsError("");
+    void (async () => {
+      try {
+        const result = await withRetry(() => listModels(providerId), 2);
+        if (cancelled) {
+          return;
+        }
+        if (!result.ok) {
+          setModelsError(result.error || "Could not list models");
+          setModelChoices([]);
+          return;
+        }
+        const found = result.models || [];
+        setModelChoices(found);
+        setDraft((prev) => {
+          if (!prev || prev.id !== providerId || prev.default_model.trim() || found.length === 0) {
+            return prev;
+          }
+          return { ...prev, default_model: found[0] };
+        });
+      } catch (err) {
+        if (!cancelled) {
+          setModelsError(errorMessage(err, "Could not list models"));
+        }
+      } finally {
+        if (!cancelled) {
+          setModelsLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [draft?.id, modelReload]);
+
+  const refreshModels = () => {
+    if (!draft) {
+      return;
+    }
+    const saved = savedRef.current;
+    const urlChanged = saved.base_url !== draft.base_url.trim();
+    const keyChanged = Boolean(draft.api_key.trim()) || draft.clear_api_key;
+    const nameChanged = saved.name !== draft.name.trim();
+    if (!draft.id || urlChanged || keyChanged || nameChanged) {
+      void save();
+      return;
+    }
+    setModelReload((value) => value + 1);
+  };
+
   return (
     <Focusable
       flow-children="column"
@@ -283,6 +378,11 @@ export function SettingsPage() {
         <PanelSectionRow>
           <div>Credentials are stored on this Deck, mode 0600, and are never written to the plugin log.</div>
         </PanelSectionRow>
+        {loading ? (
+          <PanelSectionRow>
+            <div>Loading settings…</div>
+          </PanelSectionRow>
+        ) : null}
         <ButtonItem layout="below" onClick={() => Navigation.NavigateBack()}>
           Back
         </ButtonItem>
@@ -348,7 +448,7 @@ export function SettingsPage() {
       <PanelSection title="Providers">
         {state.providers.map((provider) => (
           <ButtonItem key={provider.id} layout="below" onClick={() => beginEdit(provider)}>
-            {`${provider.name} (${labelFor(state.catalog, provider.kind)})`}
+            {`${provider.name} (${kindInfo(provider.kind)?.label || provider.kind})`}
           </ButtonItem>
         ))}
         <ButtonItem layout="below" onClick={beginCreate}>
@@ -361,7 +461,7 @@ export function SettingsPage() {
           <PanelSectionRow>
             <div>{`Type: ${kind?.label || draft.kind}. Pick a type below. The highlighted choice is the one that will be saved.`}</div>
           </PanelSectionRow>
-          {state.catalog.map((item) => (
+          {PROVIDER_KINDS.map((item) => (
             <ButtonItem key={item.kind} layout="below" onClick={() => selectKind(item)}>
               {item.kind === draft.kind ? `Selected: ${item.label}` : item.label}
             </ButtonItem>
@@ -386,13 +486,15 @@ export function SettingsPage() {
               onChange={(event) => patchDraft(setDraft, { base_url: fieldValue(event) })}
             />
           </PanelSectionRow>
-          <PanelSectionRow>
-            <TextField
-              label="Default model"
-              value={draft.default_model}
-              onChange={(event) => patchDraft(setDraft, { default_model: fieldValue(event) })}
-            />
-          </PanelSectionRow>
+          <ModelPicker
+            label="Default model"
+            models={modelChoices}
+            value={draft.default_model}
+            onChange={(model) => patchDraft(setDraft, { default_model: model })}
+            onRefresh={refreshModels}
+            loading={modelsLoading}
+            error={modelsError}
+          />
           <PanelSectionRow>
             <TextField
               label="Max tokens"
@@ -630,10 +732,6 @@ function blankDraft(kind: ProviderKindInfo): Draft {
     has_oauth_secret: false,
     oauth_connected: false,
   };
-}
-
-function labelFor(catalog: ProviderKindInfo[], kind: string): string {
-  return catalog.find((item) => item.kind === kind)?.label || kind;
 }
 
 function secretLabel(kind: string, baseUrl: string): string {

@@ -40,6 +40,9 @@ class Plugin:
             self.service.store.delete_private_files()
 
     async def get_state(self) -> dict:
+        # The settings page can open before _main finishes. Say so instead of raising.
+        if not hasattr(self, "service"):
+            return {"ok": False, "error": "AI Assistant is still starting."}
         return self._call(self.service.state)
 
     async def save_provider(self, provider: dict) -> dict:

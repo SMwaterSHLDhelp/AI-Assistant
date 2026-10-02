@@ -28,6 +28,18 @@ def _load_plugin(tmp_path: Path):
     return main
 
 
+def test_get_state_before_startup_names_the_real_error(tmp_path) -> None:
+    main = _load_plugin(tmp_path)
+
+    async def run() -> None:
+        plugin = main.Plugin()
+        result = await plugin.get_state()
+        assert result["ok"] is False
+        assert result["error"] == "AI Assistant is still starting."
+
+    asyncio.run(run())
+
+
 def test_plugin_callables_add_update_and_delete_a_provider(tmp_path) -> None:
     main = _load_plugin(tmp_path)
 

@@ -204,7 +204,7 @@ Same protocol as llama.cpp and OpenRouter: a base URL ending in `/v1`, optional 
 
 Open **AI Assistant** in the Quick Access Menu.
 
-- Pick a provider and a model. You can type a model id if the server did not list it.
+- Pick a provider, then pick a model from the list the server returns (Ollama `/api/tags`, OpenAI-compatible `/v1/models`, and the same list for xAI, Gemini, and the other backends). Saving a provider, or changing its URL or key and saving again, loads that list. **Refresh models** loads it again. You can still type a model id if the server did not list it.
 - The text field is a Steam `TextField`, so it opens the on-screen keyboard. Send is a button, so you do not need a physical keyboard.
 - Replies stream in as the backend emits Decky events.
 - **Ask about the current game** reads the running game's name from Steam (`Router.MainRunningApp`) and includes it in that message. The button stays disabled when nothing is running. An empty message with that button asks for a short spoiler-free tip.

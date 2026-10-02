@@ -44,6 +44,21 @@ def _fail(message: str) -> dict[str, Any]:
     return {"ok": False, "error": redact(message)}
 
 
+def _state_error(catalog: list[dict[str, str]], message: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": redact(message),
+        "catalog": catalog,
+        "providers": [],
+        "default_provider_id": "",
+        "default_model": "",
+        "system_prompt": "",
+        "current_session_id": "",
+        "sessions": [],
+        "messages": [],
+    }
+
+
 def _about_game(name: str) -> str:
     cleaned = " ".join(str(name or "").split())
     return cleaned[:_GAME_NAME_LIMIT]
@@ -59,11 +74,25 @@ class AssistantService:
         self._oauth_cancel: dict[str, threading.Event] = {}
 
     def state(self) -> dict[str, Any]:
-        config = self.store.load_config()
-        sessions, current = self.store.ensure_session()
+        # The catalog is static data. A broken settings or chat file must not hide it.
+        catalog = catalog_payload()
+        try:
+            config = self.store.load_config()
+        except (OSError, ValueError) as exc:
+            return _state_error(catalog, f"Could not read saved settings: {exc}")
+        try:
+            sessions, current = self.store.ensure_session()
+        except (OSError, ValueError) as exc:
+            return {
+                **_state_error(catalog, f"Could not read saved chats: {exc}"),
+                "providers": [public_provider(item) for item in config.get("providers") or []],
+                "default_provider_id": config.get("default_provider_id") or "",
+                "default_model": config.get("default_model") or "",
+                "system_prompt": config.get("system_prompt") or "",
+            }
         return {
             "ok": True,
-            "catalog": catalog_payload(),
+            "catalog": catalog,
             "providers": [public_provider(item) for item in config["providers"]],
             "default_provider_id": config.get("default_provider_id") or "",
             "default_model": config.get("default_model") or "",
