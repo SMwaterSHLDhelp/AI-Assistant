@@ -1,0 +1,11 @@
+{
+  "name": "AI Assistant",
+  "author": "SOMEwaterSHOULDhelp",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["utility", "chat"],
+    "description": "Chat with OpenAI, Claude, Gemini, Hermes, Ollama, and other models from the Quick Access Menu.",
+    "image": "https://opengraph.githubassets.com/1/SMwaterSHLDhelp/AI-Assistant"
+  }
+}
