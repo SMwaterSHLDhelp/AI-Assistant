@@ -51,7 +51,8 @@ jobs:
           chmod +x "$RUNNER_TEMP/decky"
 
       - name: Build plugin zip
-        run: "$RUNNER_TEMP/decky" plugin build -o "$GITHUB_WORKSPACE/out" .
+        run: |
+          "$RUNNER_TEMP/decky" plugin build -o "$GITHUB_WORKSPACE/out" .
 
       - name: Upload plugin zip
         uses: actions/upload-artifact@v4
