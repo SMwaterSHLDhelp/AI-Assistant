@@ -67,8 +67,8 @@ pnpm install
 pnpm run build          # frontend -> dist/index.js
 pnpm run typecheck
 pnpm run lint
-python3 -m pip install ruff pytest
-ruff check main.py py_modules tests
+python3 -m pip install -r requirements-dev.txt
+ruff check main.py py_modules tests bridge scripts
 pytest
 ```
 
@@ -79,7 +79,7 @@ The installable zip is produced by the Decky CLI, which builds the frontend insi
 decky plugin build -o ./out
 ```
 
-That writes `out/AI Assistant.zip` (the Decky CLI uses the name from `plugin.json`). The GitHub Actions workflow renames that file to `AI-Assistant.zip` before uploading it, and on tags `v*` it attaches that exact filename to the GitHub Release. A tag that contains a hyphen, such as `v0.1.0-rc.1`, is published as a prerelease so it does not replace `/releases/latest/`. See [`.github/workflows/build.yml`](.github/workflows/build.yml).
+That writes `out/AI Assistant.zip` (the Decky CLI uses the name from `plugin.json`). The GitHub Actions workflow renames that file to `AI-Assistant.zip` before uploading it, and on tags `v*` it attaches that exact filename to the GitHub Release. The release notes are the matching section of [CHANGELOG.md](CHANGELOG.md). A tag that contains a hyphen, such as `v0.1.0-rc.1`, is published as a prerelease so it does not replace `/releases/latest/`. See [`.github/workflows/build.yml`](.github/workflows/build.yml).
 
 `pnpm run build` alone is enough to refresh `dist/` while you are developing. Decky only loads the zip layout above, not the TypeScript sources.
 
@@ -238,6 +238,25 @@ decky.pyi            Type stubs for the loader's `decky` module
 ```
 
 To add a provider, add a `ProviderKind` in `py_modules/ai_assistant/catalog.py` and a list/stream function in `providers.py`. OAuth is only wired for providers that publish a real flow (`openai`, `google`, and xAI's device-code server). Claude Code sign-in shells out to `claude setup-token` instead of calling Anthropic.
+
+## Keeping it working
+
+[Dependabot](.github/dependabot.yml) opens a pull request every Monday for npm, the CI Python tools in `requirements-dev.txt`, and GitHub Actions. Minor and patch updates are grouped. Major updates are a separate pull request and are not merged automatically. The plugin and `bridge/claude_bridge.py` do not install Python packages on the Deck.
+
+Every push and pull request, including those Dependabot opens, runs typecheck, lint, the Python tests, and the Decky zip build. A separate workflow squash-merges a Dependabot minor or patch pull request after that build passes. It uses `GITHUB_TOKEN`, does not check out the pull request, and leaves major updates for a person.
+
+A weekly workflow installs the latest `@decky/ui`, `@decky/api`, and Decky CLI, then typechecks, tests, and builds the zip. If that fails, it opens an issue labeled `decky-api-drift`. The next passing run closes the issue. CodeQL scans the JavaScript, TypeScript, and Python on pushes to `main`, on pull requests other than Dependabot's, and once a week.
+
+Before tagging a release, move the **Unreleased** notes in `CHANGELOG.md` under that version. Report vulnerabilities the way [SECURITY.md](SECURITY.md) describes, not in a public issue.
+
+### Repository settings a maintainer still has to turn on
+
+This repository's automation token cannot change security settings. An admin needs to enable these under the repository Settings:
+
+- **Code security → Dependabot alerts** and **Dependabot security updates**. The weekly version updates come from `dependabot.yml`. Security updates are a separate switch, and enabling them returned "Resource not accessible by integration" from this environment.
+- **Code security → Private vulnerability reporting**, so the link in `SECURITY.md` opens a private advisory.
+- **Code security → Code scanning**, if the CodeQL workflow fails because scanning is not enabled. The workflow is the advanced setup.
+- **Actions → General → Workflow permissions → Read and write permissions**, if the auto-merge or drift-issue job fails with a permissions error. Squash merges are already allowed. **Allow auto-merge** can stay off: the workflow merges after the checks pass, and it does not approve reviews. If branch protection later requires a review, a person has to approve before that merge can succeed.
 
 ## Not done yet
 

@@ -1,0 +1,74 @@
+name: Bug report
+description: Something broke while using AI Assistant on a Steam Deck
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe what the plugin did. Do not paste API keys, OAuth tokens, `credentials.json`, or session text that you do not want public.
+  - type: input
+    id: steamos
+    attributes:
+      label: SteamOS version
+      description: From Settings → System on the Deck.
+      placeholder: "3.7.8"
+    validations:
+      required: true
+  - type: input
+    id: decky
+    attributes:
+      label: Decky Loader version
+      description: Shown in the Decky settings menu.
+      placeholder: "3.2.0"
+    validations:
+      required: true
+  - type: input
+    id: plugin
+    attributes:
+      label: Plugin version
+      description: The GitHub release you installed, such as v0.1.0-rc.3. Prerelease zips are not on /releases/latest.
+      placeholder: "v0.1.0-rc.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      description: The provider selected when this happened. Choose "Not sure" if the failure is before a provider is saved.
+      options:
+        - OpenAI / ChatGPT
+        - Anthropic Claude
+        - Claude Code (subscription)
+        - xAI Grok
+        - Google Gemini
+        - Nous Hermes
+        - Ollama
+        - llama.cpp server
+        - Custom OpenAI-compatible
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what the plugin showed instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Quick Access → AI Assistant
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Optional. Decky plugin logs only. Remove anything that looks like a key or token before pasting.
+      render: text

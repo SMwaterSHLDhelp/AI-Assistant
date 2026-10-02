@@ -1,0 +1,39 @@
+name: Dependabot auto-merge
+
+# After Build plugin or CodeQL finishes, squash-merge a Dependabot minor or patch
+# update whose checks passed. The job runs on the default branch and does not
+# check out the pull request. Major updates are left open.
+#
+# This uses GITHUB_TOKEN. It can merge only when Actions is allowed to write
+# contents and squash merges are enabled. It does not approve reviews. If branch
+# protection starts requiring a review, this job will fail until someone approves.
+
+on:
+  workflow_run:
+    workflows:
+      - Build plugin
+      - CodeQL
+    types:
+      - completed
+
+jobs:
+  merge:
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: read
+    steps:
+      - name: Checkout the default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Merge passing minor and patch updates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: python3 scripts/dependabot_automerge.py
