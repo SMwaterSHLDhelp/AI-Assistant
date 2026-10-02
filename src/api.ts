@@ -1,5 +1,5 @@
 import { callable } from "@decky/api";
-import type { AppState, OkResult, ProviderInput, PublicProvider, SessionSummary } from "./types";
+import type { AppState, OkResult, ProviderInput, PublicProvider, SessionSummary, VoiceSettings } from "./types";
 
 export const getState = callable<[], AppState & OkResult>("get_state");
 export const saveProvider = callable<[provider: ProviderInput], OkResult & { provider?: PublicProvider }>(
@@ -26,15 +26,27 @@ export const deleteSession = callable<
   [sessionId: string],
   OkResult & { current_session_id?: string; messages?: AppState["messages"]; sessions?: SessionSummary[] }
 >("delete_session");
-export const testProvider = callable<[providerId: string], OkResult & { message?: string; models?: string[] }>(
-  "test_provider",
+export const testProvider = callable<
+  [providerId: string],
+  OkResult & { message?: string; models?: string[]; vision_models?: string[] }
+>("test_provider");
+export const listModels = callable<[providerId: string], OkResult & { models?: string[]; vision_models?: string[] }>(
+  "list_models",
 );
-export const listModels = callable<[providerId: string], OkResult & { models?: string[] }>("list_models");
 export const sendMessage = callable<
   [providerId: string, model: string, content: string, requestId: string, aboutGame: string],
   OkResult & { messages?: AppState["messages"]; sessions?: SessionSummary[] }
 >("send_message");
 export const cancelChat = callable<[requestId: string], OkResult>("cancel_chat");
+export const saveVoice = callable<[settings: Partial<VoiceSettings>], OkResult & { voice?: VoiceSettings }>("save_voice");
+export const testVoice = callable<[], OkResult & { voice?: VoiceSettings; warning?: string }>("test_voice");
+export const stopSpeaking = callable<[], OkResult>("stop_speaking");
+export const retryKitten = callable<[], OkResult & { voice?: VoiceSettings }>("retry_kitten");
+export const saveLastScreenshot = callable<[], OkResult & { path?: string }>("save_last_screenshot");
+export const lookAtScreen = callable<
+  [providerId: string, model: string, question: string, requestId: string, game: string, imageB64: string, qamHidden: boolean],
+  OkResult & { messages?: AppState["messages"]; sessions?: SessionSummary[]; suggestions?: string[]; vision?: boolean }
+>("look_at_screen");
 export const startOAuth = callable<
   [providerId: string, flow: string],
   OkResult & { status?: string; message?: string; user_code?: string; verification_url?: string }

@@ -10,7 +10,7 @@ Screenshots from a Steam Deck are not in the repo yet. They will replace this pl
 
 | Quick Access chat | Provider settings |
 | --- | --- |
-| _Not captured yet. The panel has a provider and model picker, the conversation, a text field that opens the on-screen keyboard, Send, Stop, Ask about the current game, Copy, and Clear._ | _Not captured yet. The settings page adds and edits providers, tests the connection, and sets the default model._ |
+| _Not captured yet. The panel has a provider and model picker, the conversation, Send, Stop, Ask about the current game, Look at my screen, Save screenshot, Copy, and Clear._ | _Not captured yet. The settings page adds providers, picks a model, and sets voice and screen capture._ |
 
 ## Install
 
@@ -210,13 +210,48 @@ Open **AI Assistant** in the Quick Access Menu.
 - **Ask about the current game** reads the running game's name from Steam (`Router.MainRunningApp`) and includes it in that message. The button stays disabled when nothing is running. An empty message with that button asks for a short spoiler-free tip.
 - **Copy** uses Steam's clipboard when it is available.
 - **Clear chat** deletes the current conversation on the Deck. **New chat** starts another one. Older conversations stay in the conversation picker (up to 30).
-- Only one reply streams at a time. **Stop** cancels it.
+- Only one reply streams at a time. **Stop** cancels it. **Stop** also stops a spoken reply.
 
 Each request also includes the system prompt from settings, if you set one. The model sees the latest 40 messages.
+
+## Voice replies
+
+Spoken replies are off until you turn them on in settings. Two engines are available:
+
+- **Piper** is the default. The first test or spoken reply downloads the Piper program and the voice you picked into Decky's data directory for this plugin. Nothing is added to the plugin zip. The English voices are Lessac, Amy, Ryan, Alan, and Jenny Dioco, all medium quality. Lessac is the default.
+- **KittenTTS** is the second engine. It installs its wheel into a virtual environment in that same data directory and downloads the nano int8 model on first use. Voices are Bella, Jasper, Luna, Bruno, Rosie, Hugo, Kiki, and Leo. Jasper is the default. If SteamOS cannot create that environment or install the wheel, KittenTTS is disabled with the reason, and Piper keeps working. **Try KittenTTS again** repeats the install.
+
+Each engine has its own voice buttons, a speed of 0.8, 1, 1.25, or 1.5, and **Test voice**. Audio is played through the Deck user's PipeWire or PulseAudio session (`XDG_RUNTIME_DIR` and `PULSE_SERVER`). Sending a message, starting a new chat, or pressing **Stop** / **Stop speaking** interrupts playback. A KittenTTS process that is still resident is closed after it has been idle, so the model is not kept in memory. Piper exits after each line, which releases its model too.
+
+A speech failure does not fail the chat. The text reply still appears.
+
+## Looking at the screen
+
+Ask "how do I do this", "what am I looking at", "help me with this", or "what should I do here" (and a few close variants such as "look at my screen"). You can also press **Look at my screen**. On a Deck whose Steam client exposes controller registration, Steam + Y (guide + Y) does the same thing. If that API is missing, the button still works.
+
+The panel closes the Quick Access Menu first so the overlay is not in the picture, waits a moment, and then tries Steam's screenshot functions (`SteamClient.Screenshots` and `SteamClient.GameSessions`). The backend then tries, in order:
+
+1. gamescope's control socket (`screenshot <path>` on a `gamescope*` socket in `XDG_RUNTIME_DIR`)
+2. a gamescope PipeWire video node (`pw-dump`, then one frame)
+3. a new `gamescope*.png` or `steam*.png` file under `/tmp`
+
+The picture is resized so the long edge is about 1280 pixels and compressed to JPEG. It is sent with your question and the running game's name to the provider you selected, as a vision input:
+
+- OpenAI, xAI Grok, llama.cpp, and custom OpenAI-compatible servers get an `image_url` data URL
+- Anthropic gets a base64 image block
+- Gemini gets inline JPEG data
+- Ollama gets an `images` array (llava, qwen-vl, and similar)
+
+Models that can take an image are marked **sees the screen** in the model list. If the selected model is text-only, the plugin says so and offers models from that server that can see the screen. Claude Code on the Deck cannot take a screenshot from this plugin; switch to another provider for screen help.
+
+The answer uses a short Jarvis-style prompt: a few spoken sentences, friendly, and specific to the game on screen. It does not use your normal system prompt and it does not resend the whole chat. When voice replies are on, that answer is spoken.
+
+**Screen capture** in settings turns the feature off. Screenshots are sent only to the provider you chose. They are kept in memory for **Save screenshot** and are otherwise not written to disk. Saved copies go in the plugin data directory under `saved-screenshots/`. Temporary capture files under `/tmp` are removed. Steam's own screenshot folder is not deleted.
 
 ## Privacy
 
 - Chat text is sent only to the provider URL you configured. This plugin has no separate telemetry server.
+- A screen-help screenshot is sent only to that same provider, only when you ask about the screen, and only if screen capture is enabled. It is not written into `sessions.json`. It stays on disk only if you press **Save screenshot**.
 - API keys, OAuth client secrets, access tokens, and refresh tokens live in `credentials.json` under Decky's settings directory for this plugin. The directory is mode `0700` and the file is mode `0600`.
 - Conversations live in `sessions.json` under Decky's runtime data directory, also mode `0600`.
 - Logs record the provider type, model id, and status. A log filter redacts bearer tokens, `sk-` keys, Google API keys, and similar strings. Authorization headers are not logged. OAuth callback URLs are not logged, because they contain one-time codes.
@@ -262,7 +297,7 @@ This repository's automation token cannot change security settings. An admin nee
 
 - Submission to the Decky plugin store.
 - Screenshots taken on a Deck.
-- Image or file attachments.
+- General file attachments. Screen help sends one JPEG for that question and does not keep a gallery.
 - More than one streaming reply at a time.
 - A way to spend a ChatGPT Plus subscription. OpenAI does not offer that to third-party clients, and this plugin does not reuse the Codex client ID.
 - Anthropic API OAuth. They do not offer it to third-party apps. A Claude subscription is available through the Claude Code CLI provider above, which is a different product from the per-token API.

@@ -36,6 +36,38 @@ export interface SessionSummary {
   updated_at: number;
 }
 
+export interface VoiceSettings {
+  voice_enabled: boolean;
+  voice_engine: string;
+  piper_voice: string;
+  kitten_voice: string;
+  voice_speed: number;
+  screen_capture: boolean;
+  kitten_error: string;
+  piper_voices: string[];
+  kitten_voices: string[];
+}
+
+export function defaultVoice(): VoiceSettings {
+  return {
+    voice_enabled: false,
+    voice_engine: "piper",
+    piper_voice: "en_US-lessac-medium",
+    kitten_voice: "Jasper",
+    voice_speed: 1,
+    screen_capture: true,
+    kitten_error: "",
+    piper_voices: [
+      "en_US-lessac-medium",
+      "en_US-amy-medium",
+      "en_US-ryan-medium",
+      "en_GB-alan-medium",
+      "en_GB-jenny_dioco-medium",
+    ],
+    kitten_voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"],
+  };
+}
+
 export interface AppState {
   catalog: ProviderKindInfo[];
   providers: PublicProvider[];
@@ -45,6 +77,7 @@ export interface AppState {
   current_session_id: string;
   sessions: SessionSummary[];
   messages: ChatMessage[];
+  voice: VoiceSettings;
 }
 
 export interface ProviderInput {
@@ -74,6 +107,8 @@ export type BackendEvent = {
   user_code?: string;
   verification_url?: string;
   flow?: string;
+  suggestions?: string[];
+  vision?: boolean;
 };
 
 export interface OkResult {

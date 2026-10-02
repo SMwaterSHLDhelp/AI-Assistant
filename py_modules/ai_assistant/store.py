@@ -62,6 +62,35 @@ def _blank_config() -> dict[str, Any]:
     }
 
 
+def normalize_voice(raw: Any) -> dict[str, Any]:
+    voice = {
+        "voice_enabled": False,
+        "voice_engine": "piper",
+        "piper_voice": "en_US-lessac-medium",
+        "kitten_voice": "Jasper",
+        "voice_speed": 1.0,
+        "screen_capture": True,
+        "kitten_error": "",
+    }
+    if isinstance(raw, dict):
+        for key in voice:
+            if key in raw:
+                voice[key] = raw[key]
+    voice["voice_enabled"] = bool(voice["voice_enabled"])
+    voice["screen_capture"] = bool(voice["screen_capture"])
+    engine = str(voice["voice_engine"] or "piper")
+    voice["voice_engine"] = engine if engine in {"piper", "kittentts"} else "piper"
+    try:
+        speed = float(voice["voice_speed"])
+    except (TypeError, ValueError):
+        speed = 1.0
+    voice["voice_speed"] = max(0.5, min(2.0, speed))
+    voice["piper_voice"] = str(voice["piper_voice"] or "en_US-lessac-medium")[:80]
+    voice["kitten_voice"] = str(voice["kitten_voice"] or "Jasper")[:40]
+    voice["kitten_error"] = str(voice["kitten_error"] or "")[:500]
+    return voice
+
+
 def _blank_sessions() -> dict[str, Any]:
     return {"version": 1, "current_id": "", "sessions": []}
 
@@ -211,6 +240,20 @@ class Store:
             config["default_model"] = default_model.strip()
             self.save_config(config)
             return config
+
+    def update_voice(self, patch: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(patch, dict):
+            raise ValueError("Voice settings must be an object")
+        with self._lock:
+            config = self.load_config()
+            voice = normalize_voice(config.get("voice"))
+            for key in voice:
+                if key in patch:
+                    voice[key] = patch[key]
+            voice = normalize_voice(voice)
+            config["voice"] = voice
+            self.save_config(config)
+            return voice
 
     def set_oauth_tokens(
         self,

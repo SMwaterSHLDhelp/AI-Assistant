@@ -1,4 +1,4 @@
-import { addEventListener, removeEventListener } from "@decky/api";
+import { addEventListener, removeEventListener, toaster } from "@decky/api";
 import {
   ButtonItem,
   ConfirmModal,
@@ -10,12 +10,25 @@ import {
   showModal,
 } from "@decky/ui";
 import { useEffect, useRef, useState } from "react";
-import { cancelChat, clearSession, getState, listModels, newSession, sendMessage, switchSession } from "../api";
+import {
+  cancelChat,
+  clearSession,
+  getState,
+  listModels,
+  lookAtScreen,
+  newSession,
+  saveLastScreenshot,
+  sendMessage,
+  stopSpeaking,
+  switchSession,
+} from "../api";
 import { componentReady, fieldValue, optionData } from "../form";
 import { ModelPicker } from "../ModelPicker";
 import { errorMessage, sleep, withRetry } from "../retry";
+import { bindScreenChord, prepareScreenCapture, trySteamScreenshot, wantsScreenLook } from "../screenHelp";
 import { copyText, newRequestId, runningGameName } from "../steam";
 import type { AppState, BackendEvent, ChatMessage } from "../types";
+import { defaultVoice } from "../types";
 
 const emptyState = (): AppState => ({
   catalog: [],
@@ -26,6 +39,7 @@ const emptyState = (): AppState => ({
   current_session_id: "",
   sessions: [],
   messages: [],
+  voice: defaultVoice(),
 });
 
 export function ChatPanel() {
@@ -41,8 +55,12 @@ export function ChatPanel() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
   const [modelReload, setModelReload] = useState(0);
+  const [visionModels, setVisionModels] = useState<string[]>([]);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [speaking, setSpeaking] = useState(false);
   const requestRef = useRef<string | null>(null);
   const sessionRef = useRef("");
+  const lookRef = useRef<(question?: string) => Promise<void>>(async () => {});
 
   useEffect(() => {
     sessionRef.current = state.current_session_id;
@@ -88,6 +106,13 @@ export function ChatPanel() {
         requestRef.current = null;
         setStreaming(false);
         setError(event.error || "The provider returned an error");
+        return;
+      }
+      if (event.type === "speech") {
+        setSpeaking(event.status === "started");
+        if (event.status === "error" && event.error) {
+          setError(event.error);
+        }
       }
     });
     return () => removeEventListener("ai_assistant_event", listener);
@@ -105,7 +130,7 @@ export function ChatPanel() {
             return;
           }
           if (loaded.ok) {
-            setState(loaded);
+            setState({ ...loaded, voice: { ...defaultVoice(), ...(loaded.voice || {}) } });
             const initial = loaded.default_provider_id || loaded.providers[0]?.id || "";
             setProviderId(initial);
             const provider = loaded.providers.find((item) => item.id === initial);
@@ -116,7 +141,11 @@ export function ChatPanel() {
           }
           lastError = loaded.error || lastError;
           if (loaded.providers) {
-            setState((prev) => ({ ...prev, ...loaded }));
+            setState((prev) => ({
+              ...prev,
+              ...loaded,
+              voice: { ...defaultVoice(), ...(loaded.voice || prev.voice) },
+            }));
           }
         } catch (err) {
           lastError = errorMessage(err, lastError);
@@ -134,6 +163,8 @@ export function ChatPanel() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => bindScreenChord(() => void lookRef.current()), []);
 
   useEffect(() => {
     const timer = window.setInterval(() => setGame(runningGameName()), 2000);
@@ -158,10 +189,12 @@ export function ChatPanel() {
         if (!result.ok) {
           setModelsError(result.error || "Could not list models");
           setModels([]);
+          setVisionModels([]);
           return;
         }
         const found = result.models || [];
         setModels(found);
+        setVisionModels(result.vision_models || []);
         setModel((current) => current || found[0] || "");
       } catch (err) {
         if (!cancelled) {
@@ -187,8 +220,60 @@ export function ChatPanel() {
     data: item.id,
   }));
 
+  const look = async (question: string, nextModel?: string) => {
+    if (streaming) {
+      return;
+    }
+    if (!providerId) {
+      setError("Add a provider in settings first");
+      return;
+    }
+    if (!state.voice.screen_capture) {
+      setError("Screen capture is turned off in settings.");
+      return;
+    }
+    const modelId = nextModel || model;
+    if (nextModel) {
+      setModel(nextModel);
+    }
+    const requestId = newRequestId();
+    requestRef.current = requestId;
+    setStreaming(true);
+    setError("");
+    setSuggestions([]);
+    try {
+      await stopSpeaking();
+      const shot = await prepareScreenCapture(() => Navigation.CloseSideMenus(), sleep, trySteamScreenshot);
+      const result = await lookAtScreen(providerId, modelId, question, requestId, runningGameName(), shot || "", true);
+      if (!result.ok) {
+        requestRef.current = null;
+        setStreaming(false);
+        setError(result.error || "Could not look at the screen");
+        setSuggestions(result.suggestions || []);
+        return;
+      }
+      setDraft("");
+      if (result.messages) {
+        setState((prev) => ({
+          ...prev,
+          messages: result.messages ?? prev.messages,
+          sessions: result.sessions ?? prev.sessions,
+        }));
+      }
+    } catch (err) {
+      requestRef.current = null;
+      setStreaming(false);
+      setError(errorMessage(err, "Could not look at the screen"));
+    }
+  };
+  lookRef.current = (question?: string) => look(question ?? draft);
+
   const send = async (aboutGame: string) => {
     if (streaming) {
+      return;
+    }
+    if (wantsScreenLook(draft)) {
+      await look(draft);
       return;
     }
     if (!providerId) {
@@ -217,6 +302,8 @@ export function ChatPanel() {
   };
 
   const stop = async () => {
+    setSpeaking(false);
+    await stopSpeaking();
     const requestId = requestRef.current;
     if (requestId) {
       await cancelChat(requestId);
@@ -280,6 +367,7 @@ export function ChatPanel() {
               onRefresh={() => setModelReload((value) => value + 1)}
               loading={modelsLoading}
               error={modelsError}
+              visionIds={visionModels}
             />
           </>
         )}
@@ -365,6 +453,11 @@ export function ChatPanel() {
             <div style={{ color: "#f2b8b5", whiteSpace: "pre-wrap" }}>{error}</div>
           </PanelSectionRow>
         ) : null}
+        {suggestions.map((id) => (
+          <ButtonItem key={id} layout="below" onClick={() => void look(draft, id)}>
+            {`Switch to ${id}`}
+          </ButtonItem>
+        ))}
       </PanelSection>
 
       <PanelSection title="Message">
@@ -393,6 +486,39 @@ export function ChatPanel() {
           onClick={() => void send(game)}
         >
           Ask about the current game
+        </ButtonItem>
+        <ButtonItem
+          layout="below"
+          disabled={streaming || !providerId || !state.voice.screen_capture}
+          description={
+            state.voice.screen_capture
+              ? "Hides this menu, then asks about the screen. Steam + Y does this too when the controller API is available."
+              : "Screen capture is off"
+          }
+          onClick={() => void look(draft)}
+        >
+          Look at my screen
+        </ButtonItem>
+        {speaking && !streaming ? (
+          <ButtonItem layout="below" onClick={() => void stop()}>
+            Stop speaking
+          </ButtonItem>
+        ) : null}
+        <ButtonItem
+          layout="below"
+          onClick={() => {
+            void (async () => {
+              const saved = await saveLastScreenshot();
+              if (!saved.ok) {
+                setError(saved.error || "Nothing to save yet.");
+                return;
+              }
+              setError("");
+              toaster.toast({ title: "AI Assistant", body: "Saved the screenshot on this Deck.", duration: 3000 });
+            })();
+          }}
+        >
+          Save screenshot
         </ButtonItem>
         <ButtonItem
           layout="below"

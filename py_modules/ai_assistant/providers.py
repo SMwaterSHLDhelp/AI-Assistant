@@ -8,7 +8,7 @@ import urllib.parse
 from collections.abc import Iterator
 from typing import Any
 
-from . import claude_code
+from . import claude_code, vision
 from .http_util import HttpError, iter_lines, join_url, request_json
 from .redact import redact
 from .sse import iter_json_lines, iter_sse_json
@@ -73,6 +73,7 @@ def iter_text(
     model: str,
     cancel: threading.Event,
     meta: dict[str, Any] | None = None,
+    image: bytes | None = None,
 ) -> Iterator[str]:
     kind = str(provider.get("kind") or "")
     chosen = model.strip()
@@ -81,6 +82,11 @@ def iter_text(
     if not chosen:
         raise ValueError("Choose a model")
     model = chosen
+    if image and kind == "claude_code":
+        raise ValueError(
+            "Claude Code cannot view screenshots. "
+            "Switch to an Anthropic, OpenAI, Gemini, Grok, Ollama, or llama.cpp model that can see images."
+        )
     dispatch = {
         "openai": _iter_openai,
         "hermes": _iter_openai,
@@ -98,7 +104,7 @@ def iter_text(
     if kind == "claude_code":
         yield from _iter_claude(provider, messages, model.strip(), cancel, meta)
         return
-    yield from handler(provider, messages, model.strip(), cancel)
+    yield from handler(provider, messages, model.strip(), cancel, image)
 
 
 def _auth_headers(provider: dict[str, Any]) -> dict[str, str]:
@@ -348,13 +354,19 @@ def _iter_claude(
     yield from claude_code.stream_text(provider, messages, model, cancel, meta)
 
 
-def _iter_openai(provider: dict[str, Any], messages: list[dict[str, str]], model: str, cancel: threading.Event) -> Iterator[str]:
+def _iter_openai(
+    provider: dict[str, Any],
+    messages: list[dict[str, str]],
+    model: str,
+    cancel: threading.Event,
+    image: bytes | None = None,
+) -> Iterator[str]:
     if provider.get("kind") in {"openai", "hermes", "xai"}:
         require_credentials(provider)
     token_field = "max_completion_tokens" if provider.get("kind") == "openai" else "max_tokens"
     body = {
         "model": model,
-        "messages": messages,
+        "messages": vision.openai_messages(messages, image),
         "stream": True,
         token_field: _max_tokens(provider),
     }
@@ -385,10 +397,16 @@ def _iter_openai(provider: dict[str, Any], messages: list[dict[str, str]], model
         raise
 
 
-def _iter_anthropic(provider: dict[str, Any], messages: list[dict[str, str]], model: str, cancel: threading.Event) -> Iterator[str]:
+def _iter_anthropic(
+    provider: dict[str, Any],
+    messages: list[dict[str, str]],
+    model: str,
+    cancel: threading.Event,
+    image: bytes | None = None,
+) -> Iterator[str]:
     token = require_credentials(provider)
     system, rest = _split_system(messages)
-    conv = _merge_roles(rest, "assistant")
+    conv = vision.anthropic_messages(_merge_roles(rest, "assistant"), image)
     if not conv:
         raise ValueError("Nothing to send")
     body: dict[str, Any] = {
@@ -426,12 +444,21 @@ def _iter_anthropic(provider: dict[str, Any], messages: list[dict[str, str]], mo
             yield delta["text"]
 
 
-def _iter_gemini(provider: dict[str, Any], messages: list[dict[str, str]], model: str, cancel: threading.Event) -> Iterator[str]:
+def _iter_gemini(
+    provider: dict[str, Any],
+    messages: list[dict[str, str]],
+    model: str,
+    cancel: threading.Event,
+    image: bytes | None = None,
+) -> Iterator[str]:
     system, rest = _split_system(messages)
     contents = []
-    for message in _merge_roles(rest, "model"):
+    merged = _merge_roles(rest, "model")
+    last_user = max((index for index, message in enumerate(merged) if message["role"] == "user"), default=-1)
+    for index, message in enumerate(merged):
         role = "model" if message["role"] == "model" else "user"
-        contents.append({"role": role, "parts": [{"text": message["content"]}]})
+        attached = image if index == last_user else None
+        contents.append({"role": role, "parts": vision.gemini_parts(message["content"], attached)})
     if not contents:
         raise ValueError("Nothing to send")
     body: dict[str, Any] = {
@@ -464,10 +491,16 @@ def _iter_gemini(provider: dict[str, Any], messages: list[dict[str, str]], model
                 yield part["text"]
 
 
-def _iter_ollama(provider: dict[str, Any], messages: list[dict[str, str]], model: str, cancel: threading.Event) -> Iterator[str]:
+def _iter_ollama(
+    provider: dict[str, Any],
+    messages: list[dict[str, str]],
+    model: str,
+    cancel: threading.Event,
+    image: bytes | None = None,
+) -> Iterator[str]:
     body = {
         "model": model,
-        "messages": messages,
+        "messages": vision.ollama_messages(messages, image),
         "stream": True,
         "options": {"num_predict": _max_tokens(provider)},
     }

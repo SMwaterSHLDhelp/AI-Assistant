@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import secrets
 import threading
 import time
@@ -13,9 +14,13 @@ from . import claude_code, oauth, providers
 from .catalog import catalog_payload, get_kind
 from .claude_code import ClaudeCodeError
 from .http_util import HttpError
+from .imageutil import to_jpeg
 from .oauth import OAuthError
 from .redact import redact
-from .store import Store, public_provider, public_session_summary
+from .screen import capture_screen, decode_supplied_image
+from .store import Store, normalize_voice, public_provider, public_session_summary
+from .vision import DEFAULT_QUESTION, jarvis_prompt, model_sees_images, vision_ids
+from .voice import VoiceEngine
 
 EVENT = "ai_assistant_event"
 _GAME_NAME_LIMIT = 120
@@ -44,7 +49,7 @@ def _fail(message: str) -> dict[str, Any]:
     return {"ok": False, "error": redact(message)}
 
 
-def _state_error(catalog: list[dict[str, str]], message: str) -> dict[str, Any]:
+def _state_error(catalog: list[dict[str, str]], message: str, voice: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": False,
         "error": redact(message),
@@ -56,12 +61,21 @@ def _state_error(catalog: list[dict[str, str]], message: str) -> dict[str, Any]:
         "current_session_id": "",
         "sessions": [],
         "messages": [],
+        "voice": voice,
     }
 
 
 def _about_game(name: str) -> str:
     cleaned = " ".join(str(name or "").split())
     return cleaned[:_GAME_NAME_LIMIT]
+
+
+def _as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return bool(value)
 
 
 class AssistantService:
@@ -72,19 +86,23 @@ class AssistantService:
         self._tasks: set[asyncio.Task[None]] = set()
         self._oauth: dict[str, dict[str, Any]] = {}
         self._oauth_cancel: dict[str, threading.Event] = {}
+        self.voice = VoiceEngine(self.store)
+        self.screen_grabbers = None
+        self._last_jpeg: bytes | None = None
 
     def state(self) -> dict[str, Any]:
         # The catalog is static data. A broken settings or chat file must not hide it.
         catalog = catalog_payload()
+        voice = self.voice.public()
         try:
             config = self.store.load_config()
         except (OSError, ValueError) as exc:
-            return _state_error(catalog, f"Could not read saved settings: {exc}")
+            return _state_error(catalog, f"Could not read saved settings: {exc}", voice)
         try:
             sessions, current = self.store.ensure_session()
         except (OSError, ValueError) as exc:
             return {
-                **_state_error(catalog, f"Could not read saved chats: {exc}"),
+                **_state_error(catalog, f"Could not read saved chats: {exc}", voice),
                 "providers": [public_provider(item) for item in config.get("providers") or []],
                 "default_provider_id": config.get("default_provider_id") or "",
                 "default_model": config.get("default_model") or "",
@@ -100,6 +118,7 @@ class AssistantService:
             "current_session_id": current["id"],
             "sessions": [public_session_summary(item) for item in sessions["sessions"]],
             "messages": list(current.get("messages") or []),
+            "voice": voice,
         }
 
     def save_provider(self, incoming: dict[str, Any]) -> dict[str, Any]:
@@ -123,6 +142,7 @@ class AssistantService:
         return {"ok": True, **self._state_bits()}
 
     def new_session(self) -> dict[str, Any]:
+        self.voice.stop()
         current = self.store.new_session()
         return {"ok": True, "current_session_id": current["id"], "messages": [], **self._session_bits()}
 
@@ -136,6 +156,7 @@ class AssistantService:
         }
 
     def clear_session(self) -> dict[str, Any]:
+        self.voice.stop()
         current = self.store.clear_session()
         return {"ok": True, "current_session_id": current["id"], "messages": [], **self._session_bits()}
 
@@ -162,7 +183,7 @@ class AssistantService:
             message = f"Connected. {len(models)} model{'s' if len(models) != 1 else ''} available."
         else:
             message = "Connected, but the server did not list any models. You can still type a model id."
-        return {"ok": True, "message": message, "models": preview}
+        return {"ok": True, "message": message, "models": preview, "vision_models": vision_ids(preview)}
 
     async def list_models(self, provider_id: str) -> dict[str, Any]:
         provider = await self._provider_ready(provider_id)
@@ -170,7 +191,8 @@ class AssistantService:
             models = await asyncio.to_thread(providers.list_models, provider)
         except (HttpError, ValueError, OSError, ClaudeCodeError) as exc:
             return _fail(str(exc))
-        return {"ok": True, "models": models[:80]}
+        shown = models[:80]
+        return {"ok": True, "models": shown, "vision_models": vision_ids(shown)}
 
     def start_chat(
         self,
@@ -184,6 +206,7 @@ class AssistantService:
             raise ValueError("Missing request id")
         if self._streams:
             return _fail("A response is still streaming")
+        self.voice.stop()
         text = str(content or "").strip()
         game = _about_game(about_game)
         if game and text:
@@ -210,11 +233,105 @@ class AssistantService:
         }
 
     def cancel_chat(self, request_id: str) -> dict[str, Any]:
+        self.voice.stop()
         cancel = self._streams.get(request_id)
         if cancel is None:
             return {"ok": True, "message": "Nothing to stop"}
         cancel.set()
         return {"ok": True}
+
+    def save_voice(self, settings: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(settings, dict):
+            raise ValueError("Voice settings must be an object")
+        return {"ok": True, "voice": self.voice.update(settings)}
+
+    async def test_voice(self) -> dict[str, Any]:
+        return await asyncio.to_thread(self.voice.test)
+
+    def stop_speaking(self) -> dict[str, Any]:
+        self.voice.stop()
+        return {"ok": True}
+
+    async def retry_kitten(self) -> dict[str, Any]:
+        return await asyncio.to_thread(self.voice.retry_kitten)
+
+    def save_last_screenshot(self) -> dict[str, Any]:
+        data = self._last_jpeg
+        if not data:
+            return _fail("Nothing to save yet.")
+        folder = os.path.join(self.store.runtime_dir, "saved-screenshots")
+        os.makedirs(folder, exist_ok=True)
+        os.chmod(folder, 0o700)
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        path = os.path.join(folder, f"screen-{stamp}.jpg")
+        suffix = 1
+        while os.path.exists(path):
+            path = os.path.join(folder, f"screen-{stamp}-{suffix}.jpg")
+            suffix += 1
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.chmod(path, 0o600)
+        return {"ok": True, "path": path}
+
+    def look_at_screen(
+        self,
+        provider_id: str,
+        model: str,
+        question: str,
+        request_id: str,
+        game: str,
+        image_b64: str,
+        qam_hidden: bool,
+    ) -> dict[str, Any]:
+        self.voice.stop()
+        if not request_id or len(str(request_id)) > 80:
+            raise ValueError("Missing request id")
+        if self._streams:
+            return _fail("A response is still streaming")
+        enabled = bool(normalize_voice(self.store.load_config().get("voice"))["screen_capture"])
+        hidden = _as_bool(qam_hidden)
+        if not enabled:
+            return _fail("Screen capture is turned off in settings.")
+        if not hidden:
+            return _fail("Hide the Quick Access Menu before taking the shot.")
+        provider = self.store.get_provider(provider_id)
+        chosen = str(model or "").strip() or str(provider.get("default_model") or "")
+        if provider.get("kind") == "claude_code" or not model_sees_images(chosen):
+            return self._text_only(provider, chosen)
+        question_text = " ".join(str(question or "").split())[:2000] or DEFAULT_QUESTION
+        game_name = _about_game(game)
+        _, current = self.store.ensure_session()
+        cancel = threading.Event()
+        self._streams[request_id] = cancel
+        task = asyncio.get_running_loop().create_task(
+            self._run_screen(
+                provider_id,
+                chosen,
+                question_text,
+                request_id,
+                current["id"],
+                cancel,
+                game_name,
+                str(image_b64 or ""),
+            )
+        )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return {"ok": True, "request_id": request_id}
+
+    def _text_only(self, provider: dict[str, Any], chosen: str) -> dict[str, Any]:
+        suggestions: list[str] = []
+        try:
+            suggestions = vision_ids(providers.list_models(provider))[:8]
+        except (HttpError, ValueError, OSError, ClaudeCodeError):
+            suggestions = []
+        if provider.get("kind") == "claude_code":
+            message = "Claude Code cannot view screenshots. Switch to a model that can see images."
+        else:
+            label = chosen or "This model"
+            message = f"{label} only reads text. Switch to a model that can see images."
+        return {"ok": False, "vision": False, "error": message, "suggestions": suggestions}
 
     def start_oauth(self, provider_id: str, flow: str) -> dict[str, Any]:
         provider = self.store.get_provider(provider_id)
@@ -258,6 +375,7 @@ class AssistantService:
         return {"ok": True, **self._public_oauth(provider_id)}
 
     async def shutdown(self) -> None:
+        self.voice.stop()
         for cancel in list(self._streams.values()):
             cancel.set()
         for cancel in list(self._oauth_cancel.values()):
@@ -314,6 +432,68 @@ class AssistantService:
     async def _emit(self, payload: dict[str, Any]) -> None:
         await self.host.emit(EVENT, payload)
 
+    def _speak_reply(self, text: str) -> None:
+        loop = asyncio.get_running_loop()
+
+        def run() -> None:
+            try:
+                asyncio.run_coroutine_threadsafe(self._emit({"type": "speech", "status": "started"}), loop).result()
+            except Exception:
+                self.host.warning("Could not report that speech started")
+            result = self.voice.speak_blocking(text)
+            status = "error" if result.get("error") else "done"
+            payload = {"type": "speech", "status": status, "error": result.get("error") or result.get("warning") or ""}
+            try:
+                asyncio.run_coroutine_threadsafe(self._emit(payload), loop).result()
+            except Exception:
+                self.host.warning("Could not report that speech finished")
+
+        threading.Thread(target=run, daemon=True).start()
+
+    async def _run_screen(
+        self,
+        provider_id: str,
+        model: str,
+        question: str,
+        request_id: str,
+        session_id: str,
+        cancel: threading.Event,
+        game: str,
+        image_b64: str,
+    ) -> None:
+        try:
+            raw = await asyncio.to_thread(self._obtain_screen, image_b64)
+            jpeg = await asyncio.to_thread(to_jpeg, raw)
+            self._last_jpeg = jpeg
+            self.store.append_message(session_id, "user", f"[Looking at the screen] {question}")
+        except Exception as exc:  # noqa: BLE001 - shown in the panel, never logged raw
+            self._streams.pop(request_id, None)
+            self.host.warning("Screen capture failed")
+            await self._emit(
+                {"type": "chat_error", "request_id": request_id, "session_id": session_id, "error": redact(str(exc))}
+            )
+            return
+        await self._run_chat(
+            provider_id,
+            model,
+            request_id,
+            session_id,
+            cancel,
+            image=jpeg,
+            system_override=jarvis_prompt(game),
+            history_override=[{"role": "user", "content": question}],
+        )
+
+    def _obtain_screen(self, image_b64: str) -> bytes:
+        if str(image_b64 or "").strip():
+            return decode_supplied_image(image_b64, self.store.runtime_dir)
+        return capture_screen(
+            qam_hidden=True,
+            enabled=True,
+            runtime_dir=self.store.runtime_dir,
+            grabbers=self.screen_grabbers,
+        )
+
     async def _run_chat(
         self,
         provider_id: str,
@@ -321,6 +501,9 @@ class AssistantService:
         request_id: str,
         session_id: str,
         cancel: threading.Event,
+        image: bytes | None = None,
+        system_override: str | None = None,
+        history_override: list[dict[str, str]] | None = None,
     ) -> None:
         collected: list[str] = []
         meta: dict[str, Any] = {}
@@ -331,18 +514,23 @@ class AssistantService:
             _data, current = self.store.ensure_session()
             if current["id"] != session_id:
                 current = next(item for item in _data["sessions"] if item.get("id") == session_id)
-            history = [
-                {"role": item["role"], "content": item["content"]}
-                for item in (current.get("messages") or [])
-                if item.get("role") in {"user", "assistant"}
-            ]
-            messages = providers.prepare_messages(provider, history, str(config.get("system_prompt") or ""))
+            if history_override is not None:
+                history = history_override
+                prompt = system_override or ""
+            else:
+                history = [
+                    {"role": item["role"], "content": item["content"]}
+                    for item in (current.get("messages") or [])
+                    if item.get("role") in {"user", "assistant"}
+                ]
+                prompt = str(config.get("system_prompt") or "")
+            messages = providers.prepare_messages(provider, history, prompt)
             meta["session_id"] = str(current.get("claude_session_id") or "")
-            self.host.info("Chat started kind=%s model=%s", provider.get("kind"), chosen)
+            self.host.info("Chat started kind=%s model=%s screen=%s", provider.get("kind"), chosen, bool(image))
 
             def _produce(queue: asyncio.Queue[tuple[str, object]], loop: asyncio.AbstractEventLoop) -> None:
                 try:
-                    for delta in providers.iter_text(provider, messages, chosen, cancel, meta):
+                    for delta in providers.iter_text(provider, messages, chosen, cancel, meta, image):
                         if cancel.is_set():
                             break
                         asyncio.run_coroutine_threadsafe(queue.put(("delta", delta)), loop).result()
@@ -379,6 +567,8 @@ class AssistantService:
             self.host.info("Chat finished kind=%s chars=%s", provider.get("kind"), len(full))
             data = self.store.load_sessions()
             shown = next((item for item in data["sessions"] if item.get("id") == session_id), None)
+            if full and not cancel.is_set() and self.voice.enabled():
+                self._speak_reply(full)
             await self._emit(
                 {
                     "type": "chat_done",

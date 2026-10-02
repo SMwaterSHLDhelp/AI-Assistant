@@ -11,6 +11,7 @@ export function ModelPicker({
   onRefresh,
   loading,
   error,
+  visionIds,
 }: {
   label: string;
   models: string[];
@@ -19,6 +20,7 @@ export function ModelPicker({
   onRefresh: () => void;
   loading: boolean;
   error: string;
+  visionIds?: string[];
 }) {
   const shown = models.slice(0, VISIBLE_MODELS);
   let status = "No models loaded yet. Type an id, or press Refresh models.";
@@ -37,11 +39,14 @@ export function ModelPicker({
           <div style={{ color: "#f2b8b5", whiteSpace: "pre-wrap" }}>{error}</div>
         </PanelSectionRow>
       ) : null}
-      {shown.map((id) => (
-        <ButtonItem key={id} layout="below" onClick={() => onChange(id)}>
-          {value === id ? `Selected: ${id}` : id}
-        </ButtonItem>
-      ))}
+      {shown.map((id) => {
+        const sees = visionIds?.includes(id) ? " · sees the screen" : "";
+        return (
+          <ButtonItem key={id} layout="below" onClick={() => onChange(id)}>
+            {value === id ? `Selected: ${id}${sees}` : `${id}${sees}`}
+          </ButtonItem>
+        );
+      })}
       {models.length > shown.length ? (
         <PanelSectionRow>
           <div>{`${models.length - shown.length} more models are not listed. Type the id below.`}</div>

@@ -85,6 +85,42 @@ class Plugin:
     async def cancel_chat(self, request_id: str) -> dict:
         return self._call(self.service.cancel_chat, request_id)
 
+    async def save_voice(self, settings: dict) -> dict:
+        return self._call(self.service.save_voice, settings)
+
+    async def test_voice(self) -> dict:
+        return await self._acall(self.service.test_voice)
+
+    async def stop_speaking(self) -> dict:
+        return self._call(self.service.stop_speaking)
+
+    async def retry_kitten(self) -> dict:
+        return await self._acall(self.service.retry_kitten)
+
+    async def look_at_screen(
+        self,
+        provider_id: str,
+        model: str,
+        question: str,
+        request_id: str,
+        game: str,
+        image_b64: str,
+        qam_hidden: bool,
+    ) -> dict:
+        return self._call(
+            self.service.look_at_screen,
+            provider_id,
+            model,
+            question,
+            request_id,
+            game,
+            image_b64,
+            qam_hidden,
+        )
+
+    async def save_last_screenshot(self) -> dict:
+        return self._call(self.service.save_last_screenshot)
+
     async def start_oauth(self, provider_id: str, flow: str) -> dict:
         return self._call(self.service.start_oauth, provider_id, flow)
 

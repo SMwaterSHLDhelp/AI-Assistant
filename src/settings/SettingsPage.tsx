@@ -27,6 +27,8 @@ import { ModelPicker } from "../ModelPicker";
 import { errorMessage, sleep, withRetry } from "../retry";
 import { copyText } from "../steam";
 import type { AppState, BackendEvent, OkResult, ProviderInput, ProviderKindInfo, PublicProvider } from "../types";
+import { defaultVoice } from "../types";
+import { VoiceSection } from "./VoiceSection";
 
 const emptyState = (): AppState => ({
   catalog: [],
@@ -37,6 +39,7 @@ const emptyState = (): AppState => ({
   current_session_id: "",
   sessions: [],
   messages: [],
+  voice: defaultVoice(),
 });
 
 interface Draft {
@@ -65,6 +68,7 @@ export function SettingsPage() {
   const [oauth, setOauth] = useState({ status: "", message: "", userCode: "", url: "" });
   const [loading, setLoading] = useState(true);
   const [modelChoices, setModelChoices] = useState<string[]>([]);
+  const [visionChoices, setVisionChoices] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
   const [modelReload, setModelReload] = useState(0);
@@ -85,6 +89,7 @@ export function SettingsPage() {
       current_session_id: loaded.current_session_id ?? prev.current_session_id,
       sessions: loaded.sessions ?? prev.sessions,
       messages: loaded.messages ?? prev.messages,
+      voice: { ...defaultVoice(), ...(loaded.voice || prev.voice) },
     }));
   };
 
@@ -276,6 +281,7 @@ export function SettingsPage() {
     setNotice(result.message || "Connected");
     if (result.models && result.models.length > 0) {
       setModelChoices(result.models);
+      setVisionChoices(result.vision_models || []);
       setModelsError("");
       if (!draft.default_model) {
         setDraft({ ...draft, default_model: result.models[0] });
@@ -313,6 +319,7 @@ export function SettingsPage() {
     const providerId = draft?.id || "";
     if (!providerId) {
       setModelChoices([]);
+      setVisionChoices([]);
       setModelsError("");
       setModelsLoading(false);
       return;
@@ -329,10 +336,12 @@ export function SettingsPage() {
         if (!result.ok) {
           setModelsError(result.error || "Could not list models");
           setModelChoices([]);
+          setVisionChoices([]);
           return;
         }
         const found = result.models || [];
         setModelChoices(found);
+        setVisionChoices(result.vision_models || []);
         setDraft((prev) => {
           if (!prev || prev.id !== providerId || prev.default_model.trim() || found.length === 0) {
             return prev;
@@ -445,6 +454,16 @@ export function SettingsPage() {
         </ButtonItem>
       </PanelSection>
 
+      <VoiceSection
+        voice={state.voice}
+        onVoice={(voice) => setState((prev) => ({ ...prev, voice }))}
+        onError={report}
+        onNotice={(message) => {
+          setError("");
+          setNotice(message);
+        }}
+      />
+
       <PanelSection title="Providers">
         {state.providers.map((provider) => (
           <ButtonItem key={provider.id} layout="below" onClick={() => beginEdit(provider)}>
@@ -494,6 +513,7 @@ export function SettingsPage() {
             onRefresh={refreshModels}
             loading={modelsLoading}
             error={modelsError}
+            visionIds={visionChoices}
           />
           <PanelSectionRow>
             <TextField

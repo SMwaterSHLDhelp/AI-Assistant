@@ -8,6 +8,8 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ### Added
 
+- Spoken replies, off until enabled. Piper is the default engine and KittenTTS is the second. Each downloads its voice on first use into the plugin data directory. Speed, a per-engine voice picker, and a test button are in settings. Playback uses the Deck user's PipeWire session and stops when you send, stop, or start a new chat. If KittenTTS cannot install, Piper still works.
+- Screen help. Phrases such as "how do I do this" and "what am I looking at", the **Look at my screen** button, and Steam + Y when the controller API exists, capture the game, hide the Quick Access Menu first, and send a JPEG of about 1280px to the selected vision model with the game's name. Text-only models are called out, with a switch to one that can see images. The answer is short and is spoken when voice replies are on. Screenshots are not stored unless you save them, and a setting turns capture off.
 - Dependabot updates for npm, the CI Python tools, and GitHub Actions, with minor and patch updates grouped apart from majors.
 - A weekly Actions run that rebuilds against the latest `@decky/ui`, `@decky/api`, and Decky CLI, and opens an issue if that build fails.
 - CodeQL scanning for JavaScript/TypeScript and Python.
