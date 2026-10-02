@@ -564,7 +564,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           padding: "6px 0",
         }}
       >
-        <div style={{ opacity: 0.7, fontSize: "12px", marginBottom: "4px" }}>{mine ? "You" : "Assistant"}</div>
+        <div style={{ opacity: 0.7, fontSize: "12px", marginBottom: "4px" }}>{mine ? "You" : "Deckling"}</div>
         <div>{message.content}</div>
         {!mine ? (
           <ButtonItem layout="below" onClick={() => void copyText(message.content)}>

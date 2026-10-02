@@ -150,11 +150,11 @@ class Plugin:
 
 
 def migrate_legacy(settings_dir: str, runtime_dir: str, log) -> None:
-    """Copy credentials and chats from the old AI Assistant folders when Deckling's copies are missing."""
+    """Copy credentials and chats from the previous plugin folders when Deckling's copies are missing."""
     copied_settings = _copy_if_missing(settings_dir, "credentials.json", log)
     copied_runtime = _copy_if_missing(runtime_dir, "sessions.json", log)
     if not copied_settings and not copied_runtime:
-        log("Deckling migration: nothing to copy from AI Assistant")
+        log("Deckling migration: nothing to copy from the previous install")
 
 
 def _copy_if_missing(dest_dir: str, filename: str, log) -> bool:
@@ -171,7 +171,7 @@ def _copy_if_missing(dest_dir: str, filename: str, log) -> bool:
     os.chmod(dest_dir, 0o700)
     shutil.copy2(source, dest)
     os.chmod(dest, 0o600)
-    log(f"Deckling copied {filename} from the old AI Assistant folder")
+    log(f"Deckling copied {filename} from the previous install")
     return True
 
 

@@ -71,6 +71,8 @@ jobs:
           if len(roots) != 1:
               raise SystemExit(f"expected one top-level folder, found {sorted(roots)}")
           root = next(iter(roots))
+          if root != "Deckling":
+              raise SystemExit(f"top-level folder must be Deckling, found {root}")
           required = [
               f"{root}/plugin.json",
               f"{root}/dist/index.js",

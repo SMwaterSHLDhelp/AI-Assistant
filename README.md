@@ -33,7 +33,19 @@ This is the path Decky's **Install Plugin from URL** button expects. The release
 
 `/releases/latest/` is the newest GitHub Release that is not a prerelease. That link starts working when `v0.1.0` is published. A test build cut from a branch uses a prerelease tag, and its zip is the asset on that prerelease, not this `latest` URL.
 
-The zip has one top-level folder, `Deckling` (the `name` in `plugin.json`). Inside it are `plugin.json`, `dist/index.js`, `main.py`, `package.json`, and `LICENSE`, plus the Python package and the README. Decky installs that folder under `~/homebrew/plugins/`. A Deck that already had **AI Assistant** installed keeps its providers and chats: on first start Deckling copies `credentials.json` and `sessions.json` from the old folders when the new files are not there yet.
+The zip has one top-level folder, `Deckling` (the `name` in `plugin.json`). Inside it are `plugin.json`, `dist/index.js`, `main.py`, `package.json`, and `LICENSE`, plus the Python package and the README. Decky installs that folder under `~/homebrew/plugins/`. Decky identifies a plugin by that folder name, so this zip does not replace a folder left over from the earlier name.
+
+### If you already installed the earlier build
+
+The earlier build is a different plugin entry. Its folder is `~/homebrew/plugins/AI Assistant`, and the Decky plugin list keeps showing that name until you uninstall it. Installing `Deckling.zip` adds `~/homebrew/plugins/Deckling` beside it. It does not rename the old folder.
+
+On first start, Deckling copies `credentials.json` and `sessions.json` from the old folders when the new files are not there yet. Your providers and chats should appear in Deckling. Then uninstall the old entry:
+
+1. Open the Decky plugin list.
+2. Uninstall the entry still named **AI Assistant**. Leave **Deckling** installed.
+3. Restart Decky if the old name is still in the list.
+
+Uninstalling the old entry deletes that entry's own settings folder. Do it only after Deckling shows your providers. Copying does not run again once Deckling already has a `credentials.json`. Overwriting the old folder in place also leaves the old list entry, because the folder name is what Decky loaded. Install the new zip, confirm your providers, then uninstall the old entry.
 
 ### Install Plugin from ZIP
 
@@ -87,7 +99,7 @@ That writes `out/Deckling.zip` (the Decky CLI uses the name from `plugin.json`).
 
 ## Provider setup
 
-Add a provider from the Quick Access panel's **Provider settings** button. **Test connection** calls the provider's model-list endpoint and does not send a chat prompt. Pick a default provider and model on that page. The chat panel can override the model for the current session.
+Add a provider from the Quick Access panel's **Provider settings** button. Name, URL, and key open in their own dialog so the on-screen keyboard stays on the field you are typing. **Test connection** calls the provider's model-list endpoint and does not send a chat prompt. Pick a default provider and model on that page. The chat panel can override the model for the current session.
 
 API keys and OAuth tokens are stored in Decky's plugin settings directory (`credentials.json`, mode `0600`). The file is not world-readable, and secrets are redacted before anything is written to the plugin log. Leave a key field blank while editing to keep the saved value.
 

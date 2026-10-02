@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+import { createRoot, type Root } from "react-dom/client";
 
 export function ButtonItem({
   children,
@@ -29,6 +30,11 @@ export function PanelSectionRow({ children }: { children?: ReactNode }) {
   return <div>{children}</div>;
 }
 
+type MountWindow = Window & {
+  __fieldSeq?: number;
+  __fieldMounts?: Record<string, number>;
+};
+
 export function TextField({
   label,
   value,
@@ -38,11 +44,23 @@ export function TextField({
   value?: string;
   onChange?: (event: { target: { value: string } }) => void;
 }) {
+  const keyRef = useRef("");
+  if (!keyRef.current) {
+    const win = window as MountWindow;
+    win.__fieldSeq = (win.__fieldSeq || 0) + 1;
+    keyRef.current = `${label || "field"}#${win.__fieldSeq}`;
+  }
+  useEffect(() => {
+    const win = window as MountWindow;
+    const mounts = (win.__fieldMounts = win.__fieldMounts || {});
+    mounts[keyRef.current] = (mounts[keyRef.current] || 0) + 1;
+  }, []);
   return (
     <label>
       {label}
       <input
         aria-label={label || ""}
+        data-mount-key={keyRef.current}
         value={value ?? ""}
         onChange={(event) => onChange?.({ target: { value: event.target.value } })}
       />
@@ -58,12 +76,47 @@ export function ConfirmModal() {
   return null;
 }
 
+export function ModalRoot({
+  children,
+  onCancel,
+}: {
+  children?: ReactNode;
+  onCancel?: () => void;
+}) {
+  return (
+    <div role="dialog">
+      {children}
+      <button type="button" onClick={onCancel}>
+        Close
+      </button>
+    </div>
+  );
+}
+
 export function DropdownItem() {
   return null;
 }
 
-export function showModal(): void {
-  return undefined;
+let modalRoot: Root | null = null;
+
+export function showModal(node: ReactNode) {
+  let host = document.getElementById("deckling-modal");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "deckling-modal";
+    document.body.appendChild(host);
+  }
+  modalRoot ??= createRoot(host);
+  const close = () => {
+    modalRoot?.render(null);
+  };
+  modalRoot.render(node);
+  return {
+    Close: close,
+    Update: (next: ReactNode) => {
+      modalRoot?.render(next);
+    },
+  };
 }
 
 export const Navigation = {

@@ -58,7 +58,7 @@ function installBackend(mode) {
         return new Promise(() => {});
       }
       if (mode === "fail") {
-        return { ok: false, error: "AI Assistant is still starting." };
+        return { ok: false, error: "Deckling is still starting." };
       }
       return {
         ok: true,
@@ -84,6 +84,34 @@ function installBackend(mode) {
 
 async function textOf(page) {
   return page.evaluate(() => document.body.innerText);
+}
+
+async function typeInto(page, label, text) {
+  const input = await page.waitForSelector(`input[aria-label="${label}"]`, { timeout: 4000 });
+  const before = await input.evaluate((node) => ({
+    key: node.dataset.mountKey,
+    mounts: window.__fieldMounts?.[node.dataset.mountKey] || 0,
+  }));
+  await input.evaluate((node) => {
+    node.focus();
+    node.setSelectionRange(0, node.value.length);
+  });
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type(text, { delay: 8 });
+  const after = await page.evaluate((mountKey) => {
+    const node = document.querySelector(`[data-mount-key="${mountKey}"]`);
+    return {
+      value: node?.value ?? "",
+      focused: document.activeElement === node,
+      connected: Boolean(node?.isConnected),
+      mounts: window.__fieldMounts?.[mountKey] || 0,
+    };
+  }, before.key);
+  if (!after.connected || !after.focused || after.value !== text || after.mounts !== before.mounts) {
+    throw new Error(
+      `Field ${label} lost focus or remounted. before=${JSON.stringify(before)} after=${JSON.stringify(after)}\n${await textOf(page)}`,
+    );
+  }
 }
 
 async function clickButton(page, label) {
@@ -112,7 +140,7 @@ try {
   await failPage.goto(`file://${join(outDir, "index.html")}`, { waitUntil: "networkidle0" });
   await failPage.waitForFunction(() => document.body.innerText.includes("still starting"), { timeout: 8000 });
   const beforeAdd = await textOf(failPage);
-  if (!beforeAdd.includes("AI Assistant is still starting.")) {
+  if (!beforeAdd.includes("Deckling is still starting.")) {
     throw new Error(`Real backend error was not shown:\n${beforeAdd}`);
   }
   await clickButton(failPage, "Add provider");
@@ -140,13 +168,25 @@ try {
   await savePage.evaluateOnNewDocument(installBackend, "save");
   await savePage.goto(`file://${join(outDir, "index.html")}`, { waitUntil: "networkidle0" });
   await savePage.waitForFunction(() => document.body.innerText.includes("Add provider"), { timeout: 4000 });
+  await typeInto(savePage, "System prompt", "Stay with this field while I type a long prompt.");
+  await typeInto(savePage, "Default model", "local-model-id-that-stays-focused");
   await clickButton(savePage, "Add provider");
+  await savePage.waitForSelector("#deckling-modal input[aria-label='Name']", { timeout: 4000 });
+  await typeInto(savePage, "Name", "Home llama server");
+  await typeInto(savePage, "Base URL", "http://192.168.1.20:8080/v1");
+  await typeInto(savePage, "Model", "qwen-local-typed-by-hand");
+  await typeInto(savePage, "Max tokens", "2048");
+  await typeInto(savePage, "API key", "secret-key-that-must-stay-put");
+  const callsWhileTyping = await savePage.evaluate(() => window.__calls || []);
+  if (callsWhileTyping.includes("list_models") || callsWhileTyping.includes("save_provider")) {
+    throw new Error(`Typing called the backend: ${callsWhileTyping.join(",")}`);
+  }
   await clickButton(savePage, "llama.cpp server");
   await clickButton(savePage, "Save provider");
   await savePage.waitForFunction(() => document.body.innerText.includes("qwen-test"), { timeout: 8000 });
   await clickButton(savePage, "qwen-test");
   const modelValue = await savePage.evaluate(() => {
-    const inputs = [...document.querySelectorAll('input[aria-label="Default model"]')];
+    const inputs = [...document.querySelectorAll('input[aria-label="Model"]')];
     return inputs.at(-1)?.value ?? "";
   });
   if (modelValue !== "qwen-test") {

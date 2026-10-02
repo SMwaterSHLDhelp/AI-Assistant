@@ -8,9 +8,13 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [0.1.0-rc.4] - 2026-10-02
 
+### Fixed
+
+- Provider name, URL, and key open in their own dialog. Typing no longer redraws the settings page, so the Steam keyboard stays on the field you are editing.
+
 ### Changed
 
-- The plugin is Deckling. The Quick Access title, settings page, toasts, and logs use that name. The install zip and the folder inside it are `Deckling`. On first start, credentials and chats are copied from the old AI Assistant folders when the new files are missing.
+- The plugin is Deckling. The Quick Access title, settings page, chat labels, toasts, and logs use that name. The install zip and the folder inside it are `Deckling`. Decky treats that folder as a new plugin, so an older install stays in the plugin list until you uninstall it. On first start, credentials and chats are copied from the previous folders when the new files are missing.
 - After a Dependabot minor or patch merge, the auto-merge workflow starts the build and CodeQL workflows on `main`.
 
 ### Added
