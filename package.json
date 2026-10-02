@@ -1,0 +1,68 @@
+{
+  "name": "ai-assistant",
+  "version": "0.1.0",
+  "description": "Chat with AI models from the Steam Deck Quick Access Menu",
+  "type": "module",
+  "scripts": {
+    "build": "rollup -c",
+    "watch": "rollup -c -w",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --max-warnings 0",
+    "test": "python3 -m pytest -q"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SMwaterSHLDhelp/AI-Assistant.git"
+  },
+  "keywords": [
+    "decky",
+    "plugin",
+    "steam-deck",
+    "ai",
+    "chat"
+  ],
+  "author": "SOMEwaterSHOULDhelp",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/SMwaterSHLDhelp/AI-Assistant/issues"
+  },
+  "homepage": "https://github.com/SMwaterSHLDhelp/AI-Assistant#readme",
+  "devDependencies": {
+    "@decky/rollup": "^1.0.2",
+    "@decky/ui": "^4.11.0",
+    "@rollup/rollup-linux-x64-musl": "^4.53.3",
+    "@types/react": "19.1.1",
+    "@types/react-dom": "19.1.1",
+    "eslint": "^9.16.0",
+    "globals": "^15.14.0",
+    "rollup": "^4.53.3",
+    "typescript": "^5.6.2",
+    "typescript-eslint": "^8.18.0"
+  },
+  "dependencies": {
+    "@decky/api": "^1.1.3",
+    "react-icons": "^5.3.0",
+    "tslib": "^2.7.0"
+  },
+  "pnpm": {
+    "peerDependencyRules": {
+      "ignoreMissing": [
+        "react",
+        "react-dom"
+      ]
+    },
+    "supportedArchitectures": {
+      "os": [
+        "linux"
+      ],
+      "cpu": [
+        "x64"
+      ],
+      "libc": [
+        "glibc",
+        "musl"
+      ]
+    }
+  },
+  "packageManager": "pnpm@9.15.9"
+}
