@@ -67,7 +67,7 @@ export function ChatPanel() {
   }, [state.current_session_id]);
 
   useEffect(() => {
-    const listener = addEventListener<[BackendEvent]>("ai_assistant_event", (event) => {
+    const listener = addEventListener<[BackendEvent]>("deckling_event", (event) => {
       if (event.type === "chat_delta" && event.request_id === requestRef.current && event.text) {
         const delta = event.text;
         const requestId = event.request_id;
@@ -115,14 +115,14 @@ export function ChatPanel() {
         }
       }
     });
-    return () => removeEventListener("ai_assistant_event", listener);
+    return () => removeEventListener("deckling_event", listener);
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       setLoading(true);
-      let lastError = "Could not load AI Assistant";
+      let lastError = "Could not load Deckling";
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
           const loaded = await withRetry(() => getState(), 1);
@@ -311,13 +311,13 @@ export function ChatPanel() {
   };
 
   const openSettings = () => {
-    Navigation.Navigate("/ai-assistant/settings");
+    Navigation.Navigate("/deckling/settings");
     Navigation.CloseSideMenus();
   };
 
   return (
     <>
-      <PanelSection title="AI Assistant">
+      <PanelSection title="Deckling">
         {loading ? (
           <PanelSectionRow>
             <div>Loading…</div>
@@ -514,7 +514,7 @@ export function ChatPanel() {
                 return;
               }
               setError("");
-              toaster.toast({ title: "AI Assistant", body: "Saved the screenshot on this Deck.", duration: 3000 });
+              toaster.toast({ title: "Deckling", body: "Saved the screenshot on this Deck.", duration: 3000 });
             })();
           }}
         >

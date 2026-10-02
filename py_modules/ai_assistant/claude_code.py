@@ -39,7 +39,7 @@ INSTALL_HINT = (
     "Install it from https://code.claude.com/docs/en/setup "
     "(the official installer, or npm install -g @anthropic-ai/claude-code). "
     "Then run claude login, or use Sign in with setup-token in provider settings. "
-    "To skip Node on the Deck, run bridge/claude_bridge.py on a PC and put that PC's URL in Bridge URL."
+    "To skip Node on the Deck, run bridge/deckling_bridge.py on a PC and put that PC's URL in Bridge URL."
 )
 
 _LIMIT_MESSAGES = {

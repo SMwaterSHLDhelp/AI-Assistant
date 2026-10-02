@@ -283,7 +283,7 @@ def wait_for_redirect(
             query = urllib.parse.parse_qs(parsed.query)
             state = (query.get("state") or [""])[0]
             if state != expected_state:
-                self._reply(400, "This login link does not match the one AI Assistant started.")
+                self._reply(400, "This login link does not match the one Deckling started.")
                 return
             error = (query.get("error") or [""])[0]
             if error:
@@ -305,7 +305,7 @@ def wait_for_redirect(
 
         def _reply(self, status: int, text: str) -> None:
             body = (
-                "<!doctype html><meta charset=utf-8><title>AI Assistant</title><p>"
+                "<!doctype html><meta charset=utf-8><title>Deckling</title><p>"
                 + html.escape(text)
                 + "</p>"
             ).encode("utf-8")

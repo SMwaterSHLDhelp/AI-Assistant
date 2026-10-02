@@ -1,7 +1,7 @@
 {
-  "name": "ai-assistant",
+  "name": "deckling",
   "version": "0.1.0",
-  "description": "Chat with AI models from the Steam Deck Quick Access Menu",
+  "description": "A tiny AI companion that lives in your Steam Deck",
   "type": "module",
   "scripts": {
     "build": "rollup -c",
@@ -12,7 +12,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/SMwaterSHLDhelp/AI-Assistant.git"
+    "url": "git+https://github.com/SMwaterSHLDhelp/Deckling.git"
   },
   "keywords": [
     "decky",
@@ -24,9 +24,9 @@
   "author": "SOMEwaterSHOULDhelp",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/SMwaterSHLDhelp/AI-Assistant/issues"
+    "url": "https://github.com/SMwaterSHLDhelp/Deckling/issues"
   },
-  "homepage": "https://github.com/SMwaterSHLDhelp/AI-Assistant#readme",
+  "homepage": "https://github.com/SMwaterSHLDhelp/Deckling#readme",
   "devDependencies": {
     "@decky/rollup": "^1.0.2",
     "@decky/ui": "^4.11.0",

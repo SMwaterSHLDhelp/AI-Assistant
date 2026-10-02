@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import os
+import stat
 import sys
 import types
 from pathlib import Path
@@ -35,7 +37,7 @@ def test_get_state_before_startup_names_the_real_error(tmp_path) -> None:
         plugin = main.Plugin()
         result = await plugin.get_state()
         assert result["ok"] is False
-        assert result["error"] == "AI Assistant is still starting."
+        assert result["error"] == "Deckling is still starting."
 
     asyncio.run(run())
 
@@ -106,3 +108,41 @@ def test_plugin_callables_add_update_and_delete_a_provider(tmp_path) -> None:
         await plugin._unload()
 
     asyncio.run(run())
+
+
+def test_legacy_ai_assistant_files_are_copied_once(tmp_path) -> None:
+    main = _load_plugin(tmp_path)
+    legacy = tmp_path / "AI Assistant"
+    legacy.mkdir()
+    (legacy / "credentials.json").write_text('{"providers":[]}\n', encoding="utf-8")
+    (legacy / "sessions.json").write_text('{"sessions":[]}\n', encoding="utf-8")
+
+    async def run() -> None:
+        plugin = main.Plugin()
+        await plugin._main()
+        settings = tmp_path / "settings" / "credentials.json"
+        runtime = tmp_path / "runtime" / "sessions.json"
+        assert settings.read_text(encoding="utf-8") == '{"providers":[]}\n'
+        assert runtime.read_text(encoding="utf-8") == '{"sessions":[]}\n'
+        assert stat.S_IMODE(settings.stat().st_mode) == 0o600
+        assert stat.S_IMODE(runtime.stat().st_mode) == 0o600
+        assert stat.S_IMODE((tmp_path / "settings").stat().st_mode) == 0o700
+        settings.write_text('{"kept":true}\n', encoding="utf-8")
+        await plugin._migration()
+        assert settings.read_text(encoding="utf-8") == '{"kept":true}\n'
+        await plugin._unload()
+
+    asyncio.run(run())
+
+
+def test_legacy_copy_skips_a_path_that_is_itself(tmp_path) -> None:
+    main = _load_plugin(tmp_path)
+    dest = tmp_path / "settings"
+    dest.mkdir()
+    source = dest / "credentials.json"
+    source.write_text("{}\n", encoding="utf-8")
+    # Point the legacy folder at the destination itself.
+    os.symlink(dest, tmp_path / "AI Assistant", target_is_directory=True)
+    copied = main._copy_if_missing(str(dest), "credentials.json", lambda _message: None)
+    assert copied is False
+    assert source.read_text(encoding="utf-8") == "{}\n"

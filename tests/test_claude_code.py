@@ -224,6 +224,15 @@ def test_rate_limit_is_explicit(tmp_path, monkeypatch) -> None:
     assert "rate or usage limit" in error["error"]
 
 
+def test_bridge_accepts_the_current_and_legacy_secret_headers() -> None:
+    bridge = _load_bridge()
+    secret = "bridge-secret-value"
+    assert bridge._authorized("Bearer " + secret, "", secret, "")
+    assert bridge._authorized("", secret, secret, "")
+    assert bridge._authorized("", "", secret, secret)
+    assert not bridge._authorized("", "nope", secret, "")
+
+
 def test_bridge_rejects_a_bad_secret_and_streams(tmp_path, monkeypatch) -> None:
     bindir = tmp_path / "bin"
     bindir.mkdir()

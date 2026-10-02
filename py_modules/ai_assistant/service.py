@@ -22,7 +22,7 @@ from .store import Store, normalize_voice, public_provider, public_session_summa
 from .vision import DEFAULT_QUESTION, jarvis_prompt, model_sees_images, vision_ids
 from .voice import VoiceEngine
 
-EVENT = "ai_assistant_event"
+EVENT = "deckling_event"
 _GAME_NAME_LIMIT = 120
 
 
@@ -39,10 +39,10 @@ class _NullHost:
         return None
 
     def info(self, message: str, *args: object) -> None:
-        logging.getLogger("ai_assistant").info(message, *args)
+        logging.getLogger("deckling").info(message, *args)
 
     def warning(self, message: str, *args: object) -> None:
-        logging.getLogger("ai_assistant").warning(message, *args)
+        logging.getLogger("deckling").warning(message, *args)
 
 
 def _fail(message: str) -> dict[str, Any]:

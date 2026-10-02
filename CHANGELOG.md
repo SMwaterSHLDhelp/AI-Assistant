@@ -1,10 +1,17 @@
 # Changelog
 
-All notable changes to AI Assistant are recorded here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+All notable changes to Deckling are recorded here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-Move items from **Unreleased** into a version section before tagging. The release workflow copies that section into the GitHub Release notes. A tag that contains a hyphen, such as `v0.1.0-rc.3`, is published as a prerelease and does not replace `/releases/latest/`.
+Move items from **Unreleased** into a version section before tagging. The release workflow copies that section into the GitHub Release notes. A tag that contains a hyphen, such as `v0.1.0-rc.4`, is published as a prerelease and does not replace `/releases/latest/`.
 
 ## [Unreleased]
+
+## [0.1.0-rc.4] - 2026-10-02
+
+### Changed
+
+- The plugin is Deckling. The Quick Access title, settings page, toasts, and logs use that name. The install zip and the folder inside it are `Deckling`. On first start, credentials and chats are copied from the old AI Assistant folders when the new files are missing.
+- After a Dependabot minor or patch merge, the auto-merge workflow starts the build and CodeQL workflows on `main`.
 
 ### Added
 

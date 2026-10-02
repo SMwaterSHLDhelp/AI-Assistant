@@ -1,6 +1,8 @@
-# AI Assistant
+# Deckling
 
-AI Assistant is a [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for Steam Deck. It lets you connect to an AI provider and chat from the Quick Access Menu while a game is running.
+Deckling is a tiny AI companion that lives in your Steam Deck. It is a [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin: connect a provider and chat from the Quick Access Menu while a game is running.
+
+![Deckling](icon.svg)
 
 The frontend uses the current Decky libraries: `@decky/ui` (the package that replaced `decky-frontend-lib`) and `@decky/api`. The backend is Python (`main.py`) and follows the official plugin layout so the Decky CLI can build an installable zip.
 
@@ -18,33 +20,33 @@ This plugin is **not in the Decky plugin store yet**.
 
 ### Install Plugin from URL
 
-This is the path Decky's **Install Plugin from URL** button expects. The release asset is always named `AI-Assistant.zip`, so this address keeps working after each stable release:
+This is the path Decky's **Install Plugin from URL** button expects. The release asset is always named `Deckling.zip`, so this address keeps working after each stable release:
 
-`https://github.com/SMwaterSHLDhelp/AI-Assistant/releases/latest/download/AI-Assistant.zip`
+`https://github.com/SMwaterSHLDhelp/Deckling/releases/latest/download/Deckling.zip`
 
 1. Install Decky Loader from [decky.xyz](https://decky.xyz) if you have not already.
 2. In Game Mode, open the Quick Access Menu and the Decky icon.
 3. Open the settings gear, then **Developer**.
 4. Choose **Install Plugin from URL**.
 5. Paste the address above and confirm.
-6. If the plugin does not show up, restart Decky from that same menu. It appears as **AI Assistant**.
+6. If the plugin does not show up, restart Decky from that same menu. It appears as **Deckling**.
 
 `/releases/latest/` is the newest GitHub Release that is not a prerelease. That link starts working when `v0.1.0` is published. A test build cut from a branch uses a prerelease tag, and its zip is the asset on that prerelease, not this `latest` URL.
 
-The zip has one top-level folder, `AI Assistant` (the `name` in `plugin.json`). Inside it are `plugin.json`, `dist/index.js`, `main.py`, `package.json`, and `LICENSE`, plus the Python package and the README. Decky installs that folder under `~/homebrew/plugins/`.
+The zip has one top-level folder, `Deckling` (the `name` in `plugin.json`). Inside it are `plugin.json`, `dist/index.js`, `main.py`, `package.json`, and `LICENSE`, plus the Python package and the README. Decky installs that folder under `~/homebrew/plugins/`. A Deck that already had **AI Assistant** installed keeps its providers and chats: on first start Deckling copies `credentials.json` and `sessions.json` from the old folders when the new files are not there yet.
 
 ### Install Plugin from ZIP
 
-1. Download `AI-Assistant.zip` from a [GitHub Release](https://github.com/SMwaterSHLDhelp/AI-Assistant/releases) or from the artifact on a successful Actions run.
+1. Download `Deckling.zip` from a [GitHub Release](https://github.com/SMwaterSHLDhelp/Deckling/releases) or from the artifact on a successful Actions run.
 2. Copy the zip to your Deck (a USB drive, SSH, or the browser download folder all work).
 3. Open the same **Developer** menu.
-4. Choose **Install Plugin from ZIP** and select `AI-Assistant.zip`.
+4. Choose **Install Plugin from ZIP** and select `Deckling.zip`.
 5. Restart Decky if the plugin does not appear.
 
 You can also unzip it so this folder exists:
 
 ```text
-~/homebrew/plugins/AI Assistant/
+~/homebrew/plugins/Deckling/
   plugin.json
   package.json
   main.py
@@ -54,7 +56,7 @@ You can also unzip it so this folder exists:
   py_modules/
 ```
 
-Restart Decky after copying the folder. The folder name inside the zip is `AI Assistant`, which is the name in `plugin.json`.
+Restart Decky after copying the folder. The folder name inside the zip is `Deckling`, which is the name in `plugin.json`.
 
 ## Building from source
 
@@ -79,7 +81,7 @@ The installable zip is produced by the Decky CLI, which builds the frontend insi
 decky plugin build -o ./out
 ```
 
-That writes `out/AI Assistant.zip` (the Decky CLI uses the name from `plugin.json`). The GitHub Actions workflow renames that file to `AI-Assistant.zip` before uploading it, and on tags `v*` it attaches that exact filename to the GitHub Release. The release notes are the matching section of [CHANGELOG.md](CHANGELOG.md). A tag that contains a hyphen, such as `v0.1.0-rc.1`, is published as a prerelease so it does not replace `/releases/latest/`. See [`.github/workflows/build.yml`](.github/workflows/build.yml).
+That writes `out/Deckling.zip` (the Decky CLI uses the name from `plugin.json`). The GitHub Actions workflow uploads that file as `Deckling.zip`, and on tags `v*` it attaches that exact filename to the GitHub Release. The release notes are the matching section of [CHANGELOG.md](CHANGELOG.md). A tag that contains a hyphen, such as `v0.1.0-rc.1`, is published as a prerelease so it does not replace `/releases/latest/`. See [`.github/workflows/build.yml`](.github/workflows/build.yml).
 
 `pnpm run build` alone is enough to refresh `dist/` while you are developing. Decky only loads the zip layout above, not the TypeScript sources.
 
@@ -125,12 +127,12 @@ If `claude` is not on `PATH`, **Test connection** explains how to install it. To
 
 ```bash
 export CLAUDE_BRIDGE_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-python3 bridge/claude_bridge.py --host 0.0.0.0 --port 8765
+python3 bridge/deckling_bridge.py --host 0.0.0.0 --port 8765
 ```
 
 Sign in on that PC with `claude login` or `claude setup-token` before chatting. In the plugin, set **Bridge URL** to `http://<that-pc-lan-ip>:8765` and put the same secret in **Bridge shared secret**. The script only wraps `claude -p` and checks the secret. It does not log the secret or the prompt. Keep it on your LAN.
 
-The bridge is not inside the Decky zip. Copy `bridge/claude_bridge.py` from this repository.
+The bridge is not inside the Decky zip. Copy `bridge/deckling_bridge.py` from this repository. `bridge/claude_bridge.py` is the same program, so an older command still runs. It accepts `Authorization: Bearer`, `X-Deckling-Secret`, and the older `X-AI-Assistant-Secret` header.
 
 ### xAI Grok
 
@@ -202,7 +204,7 @@ Same protocol as llama.cpp and OpenRouter: a base URL ending in `/v1`, optional 
 
 ## Using the chat
 
-Open **AI Assistant** in the Quick Access Menu.
+Open **Deckling** in the Quick Access Menu.
 
 - Pick a provider, then pick a model from the list the server returns (Ollama `/api/tags`, OpenAI-compatible `/v1/models`, and the same list for xAI, Gemini, and the other backends). Saving a provider, or changing its URL or key and saving again, loads that list. **Refresh models** loads it again. You can still type a model id if the server did not list it.
 - The text field is a Steam `TextField`, so it opens the on-screen keyboard. Send is a button, so you do not need a physical keyboard.
@@ -263,12 +265,13 @@ The answer uses a short Jarvis-style prompt: a few spoken sentences, friendly, a
 
 ```text
 plugin.json          Decky metadata (name, author, api_version)
+icon.svg             small companion mark used in the README
 package.json         pnpm manifest
 rollup.config.js     @decky/rollup preset
 src/                 React + TypeScript Quick Access panel and settings page
 main.py              Decky Plugin class
 py_modules/ai_assistant/   provider implementations (packaged into the zip)
-bridge/claude_bridge.py    optional PC-side companion for Claude Code (not inside the Decky zip)
+bridge/deckling_bridge.py  optional PC-side companion for Claude Code (not inside the Decky zip)
 decky.pyi            Type stubs for the loader's `decky` module
 ```
 
@@ -276,9 +279,9 @@ To add a provider, add a `ProviderKind` in `py_modules/ai_assistant/catalog.py` 
 
 ## Keeping it working
 
-[Dependabot](.github/dependabot.yml) opens a pull request every Monday for npm, the CI Python tools in `requirements-dev.txt`, and GitHub Actions. Minor and patch updates are grouped. Major updates are a separate pull request and are not merged automatically. The plugin and `bridge/claude_bridge.py` do not install Python packages on the Deck.
+[Dependabot](.github/dependabot.yml) opens a pull request every Monday for npm, the CI Python tools in `requirements-dev.txt`, and GitHub Actions. Minor and patch updates are grouped. Major updates are a separate pull request and are not merged automatically. The plugin and `bridge/deckling_bridge.py` do not install Python packages on the Deck.
 
-Every push and pull request, including those Dependabot opens, runs typecheck, lint, the Python tests, and the Decky zip build. A separate workflow squash-merges a Dependabot minor or patch pull request after that build passes. It uses `GITHUB_TOKEN`, does not check out the pull request, and leaves major updates for a person.
+Every push and pull request, including those Dependabot opens, runs typecheck, lint, the Python tests, and the Decky zip build. A separate workflow squash-merges a Dependabot minor or patch pull request after that build passes. It uses `GITHUB_TOKEN`, does not check out the pull request, and leaves major updates for a person. After a merge it dispatches the build and CodeQL workflows on `main`, because a token push does not start those workflows by itself.
 
 A weekly workflow installs the latest `@decky/ui`, `@decky/api`, and Decky CLI, then typechecks, tests, and builds the zip. If that fails, it opens an issue labeled `decky-api-drift`. The next passing run closes the issue. CodeQL scans the JavaScript, TypeScript, and Python on pushes to `main`, on pull requests other than Dependabot's, and once a week.
 

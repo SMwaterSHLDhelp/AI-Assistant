@@ -5,15 +5,15 @@ import { ChatPanel } from "./chat/ChatPanel";
 import { SettingsPage } from "./settings/SettingsPage";
 
 export default definePlugin(() => {
-  routerHook.addRoute("/ai-assistant/settings", SettingsPage, { exact: true });
+  routerHook.addRoute("/deckling/settings", SettingsPage, { exact: true });
 
   return {
-    name: "AI Assistant",
-    titleView: <div className={staticClasses.Title}>AI Assistant</div>,
+    name: "Deckling",
+    titleView: <div className={staticClasses.Title}>Deckling</div>,
     content: <ChatPanel />,
     icon: <FaRobot />,
     onDismount() {
-      routerHook.removeRoute("/ai-assistant/settings");
+      routerHook.removeRoute("/deckling/settings");
     },
   };
 });

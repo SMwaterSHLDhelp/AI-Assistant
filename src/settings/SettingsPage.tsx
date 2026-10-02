@@ -76,7 +76,7 @@ export function SettingsPage() {
 
   const report = (message: string) => {
     setError(message);
-    toaster.toast({ title: "AI Assistant", body: message, duration: 6000 });
+    toaster.toast({ title: "Deckling", body: message, duration: 6000 });
   };
 
   const applyLoaded = (loaded: Partial<AppState> & OkResult) => {
@@ -119,7 +119,7 @@ export function SettingsPage() {
 
   useEffect(() => {
     void load();
-    const listener = addEventListener<[BackendEvent]>("ai_assistant_event", (event) => {
+    const listener = addEventListener<[BackendEvent]>("deckling_event", (event) => {
       if (event.type !== "oauth") {
         return;
       }
@@ -133,7 +133,7 @@ export function SettingsPage() {
         void load();
       }
     });
-    return () => removeEventListener("ai_assistant_event", listener);
+    return () => removeEventListener("deckling_event", listener);
   }, []);
 
   const kind = kindInfo(draft?.kind || "");
@@ -383,7 +383,7 @@ export function SettingsPage() {
       flow-children="column"
       style={{ padding: "16px 16px 48px", maxWidth: "900px", margin: "0 auto" }}
     >
-      <PanelSection title="AI Assistant settings">
+      <PanelSection title="Deckling settings">
         <PanelSectionRow>
           <div>Credentials are stored on this Deck, mode 0600, and are never written to the plugin log.</div>
         </PanelSectionRow>
@@ -548,7 +548,7 @@ export function SettingsPage() {
               <PanelSectionRow>
                 <div>
                   Install Claude Code on this Deck from the official setup page, then sign in here or with claude login.
-                  Remote mode runs bridge/claude_bridge.py on a PC instead. Use of Claude Code follows Anthropic's terms.
+                  Remote mode runs bridge/deckling_bridge.py on a PC instead. Use of Claude Code follows Anthropic's terms.
                 </div>
               </PanelSectionRow>
               <ButtonItem layout="below" disabled={!draft.id || Boolean(draft.base_url.trim())} onClick={() => void login("setup-token")}>
@@ -764,7 +764,7 @@ function secretLabel(kind: string, baseUrl: string): string {
 function secretDescription(kind: string, baseUrl: string, hasSecret: boolean, last4: string): string {
   const saved = hasSecret ? `Saved value ending in ${last4 || "••••"}. Leave blank to keep it. ` : "";
   if (kind === "claude_code" && baseUrl.trim()) {
-    return `${saved}The secret you gave bridge/claude_bridge.py. This is not the Claude token.`;
+    return `${saved}The secret you gave bridge/deckling_bridge.py. This is not the Claude token.`;
   }
   if (kind === "claude_code") {
     return `${saved}Optional if this Deck is already signed in with claude login. Sign in below, or paste the token from claude setup-token.`;

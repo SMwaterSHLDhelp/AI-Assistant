@@ -1,4 +1,5 @@
 import os
+import shutil
 
 import decky
 
@@ -6,7 +7,8 @@ from ai_assistant.redact import RedactFilter, redact
 from ai_assistant.service import AssistantService
 
 # Single event name the Quick Access panel and the settings page both listen for.
-EVENT = "ai_assistant_event"
+EVENT = "deckling_event"
+LEGACY_NAME = "AI Assistant"
 
 
 class Plugin:
@@ -15,10 +17,12 @@ class Plugin:
     service: AssistantService
 
     async def _migration(self) -> None:
-        decky.logger.info("AI Assistant migration: nothing to move")
+        migrate_legacy(decky.DECKY_PLUGIN_SETTINGS_DIR, decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger.info)
 
     async def _main(self) -> None:
         decky.logger.addFilter(RedactFilter())
+        # Copy the old plugin's files before the service reads them. _migration does not run every boot.
+        migrate_legacy(decky.DECKY_PLUGIN_SETTINGS_DIR, decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger.info)
         self.service = AssistantService(
             decky.DECKY_PLUGIN_SETTINGS_DIR,
             decky.DECKY_PLUGIN_RUNTIME_DIR,
@@ -27,22 +31,22 @@ class Plugin:
         # Touch the settings directory so a fresh install gets mode 0700 immediately.
         os.makedirs(decky.DECKY_PLUGIN_SETTINGS_DIR, exist_ok=True)
         os.chmod(decky.DECKY_PLUGIN_SETTINGS_DIR, 0o700)
-        decky.logger.info("AI Assistant ready")
+        decky.logger.info("Deckling ready")
 
     async def _unload(self) -> None:
-        decky.logger.info("AI Assistant unloading")
+        decky.logger.info("Deckling unloading")
         if hasattr(self, "service"):
             await self.service.shutdown()
 
     async def _uninstall(self) -> None:
-        decky.logger.info("AI Assistant removing saved credentials and chats")
+        decky.logger.info("Deckling removing saved credentials and chats")
         if hasattr(self, "service"):
             self.service.store.delete_private_files()
 
     async def get_state(self) -> dict:
         # The settings page can open before _main finishes. Say so instead of raising.
         if not hasattr(self, "service"):
-            return {"ok": False, "error": "AI Assistant is still starting."}
+            return {"ok": False, "error": "Deckling is still starting."}
         return self._call(self.service.state)
 
     async def save_provider(self, provider: dict) -> dict:
@@ -143,6 +147,32 @@ class Plugin:
         except Exception as exc:  # noqa: BLE001 - returned to the UI, never logged raw
             decky.logger.warning("%s failed: %s", getattr(fn, "__name__", "call"), redact(str(exc)))
             return {"ok": False, "error": redact(str(exc))}
+
+
+def migrate_legacy(settings_dir: str, runtime_dir: str, log) -> None:
+    """Copy credentials and chats from the old AI Assistant folders when Deckling's copies are missing."""
+    copied_settings = _copy_if_missing(settings_dir, "credentials.json", log)
+    copied_runtime = _copy_if_missing(runtime_dir, "sessions.json", log)
+    if not copied_settings and not copied_runtime:
+        log("Deckling migration: nothing to copy from AI Assistant")
+
+
+def _copy_if_missing(dest_dir: str, filename: str, log) -> bool:
+    dest = os.path.join(dest_dir, filename)
+    if os.path.exists(dest):
+        return False
+    parent = os.path.dirname(os.path.abspath(dest_dir))
+    source = os.path.join(parent, LEGACY_NAME, filename)
+    if not os.path.isfile(source):
+        return False
+    if os.path.realpath(source) == os.path.realpath(dest):
+        return False
+    os.makedirs(dest_dir, exist_ok=True)
+    os.chmod(dest_dir, 0o700)
+    shutil.copy2(source, dest)
+    os.chmod(dest, 0o600)
+    log(f"Deckling copied {filename} from the old AI Assistant folder")
+    return True
 
 
 class _DeckyHost:

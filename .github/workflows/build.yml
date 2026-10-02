@@ -57,13 +57,15 @@ jobs:
           "$RUNNER_TEMP/decky" plugin build -o "$GITHUB_WORKSPACE/out" .
           zipfile="$(find out -name '*.zip' -print -quit)"
           test -n "$zipfile"
-          mv "$zipfile" out/AI-Assistant.zip
+          if [ "$zipfile" != "out/Deckling.zip" ]; then
+            mv "$zipfile" out/Deckling.zip
+          fi
 
       - name: Check Decky zip layout
         run: |
           python3 - <<'PY'
           import zipfile
-          archive = zipfile.ZipFile("out/AI-Assistant.zip")
+          archive = zipfile.ZipFile("out/Deckling.zip")
           names = [name for name in archive.namelist() if name and not name.endswith("/")]
           roots = {name.split("/", 1)[0] for name in names}
           if len(roots) != 1:
@@ -85,8 +87,8 @@ jobs:
       - name: Upload plugin zip
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: AI-Assistant
-          path: out/AI-Assistant.zip
+          name: Deckling
+          path: out/Deckling.zip
           if-no-files-found: error
 
   release:
@@ -104,15 +106,15 @@ jobs:
       - name: Download plugin zip
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: AI-Assistant
+          name: Deckling
           path: out
 
       - name: Place the zip where the release expects it
         run: |
-          zipfile="$(find out -name 'AI-Assistant.zip' -print -quit)"
+          zipfile="$(find out -name 'Deckling.zip' -print -quit)"
           test -n "$zipfile"
-          if [ "$zipfile" != "out/AI-Assistant.zip" ]; then
-            mv "$zipfile" out/AI-Assistant.zip
+          if [ "$zipfile" != "out/Deckling.zip" ]; then
+            mv "$zipfile" out/Deckling.zip
           fi
 
       - name: Write release notes
@@ -121,7 +123,7 @@ jobs:
       - name: Attach zip to the GitHub release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          files: out/AI-Assistant.zip
+          files: out/Deckling.zip
           body_path: ${{ runner.temp }}/release-notes.md
           fail_on_unmatched_files: true
           prerelease: ${{ contains(github.ref_name, '-') }}

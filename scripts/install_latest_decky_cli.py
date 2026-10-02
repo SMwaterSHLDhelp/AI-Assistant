@@ -22,7 +22,7 @@ def linux_asset_url(release: dict) -> str:
 
 def download(dest: Path) -> None:
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
-    headers = {"Accept": "application/vnd.github+json", "User-Agent": "AI-Assistant-drift"}
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "Deckling-drift"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(RELEASES_URL, headers=headers)

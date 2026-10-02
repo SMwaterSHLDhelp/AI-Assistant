@@ -1,11 +1,11 @@
 {
-  "name": "AI Assistant",
+  "name": "Deckling",
   "author": "SOMEwaterSHOULDhelp",
   "flags": [],
   "api_version": 1,
   "publish": {
     "tags": ["utility", "chat"],
     "description": "Chat with OpenAI, Claude, Claude Code subscriptions, Grok, Gemini, Hermes, Ollama, and other models from the Quick Access Menu.",
-    "image": "https://opengraph.githubassets.com/1/SMwaterSHLDhelp/AI-Assistant"
+    "image": "https://opengraph.githubassets.com/1/SMwaterSHLDhelp/Deckling"
   }
 }

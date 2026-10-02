@@ -10,7 +10,7 @@ Please report vulnerabilities privately. Do not open a public issue, and do not 
 
 Use GitHub private vulnerability reporting:
 
-https://github.com/SMwaterSHLDhelp/AI-Assistant/security/advisories/new
+https://github.com/SMwaterSHLDhelp/Deckling/security/advisories/new
 
 That page works after a repository admin enables **Private vulnerability reporting** under Settings → Code security. If the page is unavailable, contact the repository owner through GitHub and describe the impact without including secrets. A maintainer will reply with a way to share the details.
 

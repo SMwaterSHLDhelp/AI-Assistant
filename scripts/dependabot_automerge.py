@@ -153,7 +153,18 @@ def main() -> int:
         return 0
     print(f"Merging #{number}: {title}")
     subprocess.check_call(["gh", "pr", "merge", str(number), "--repo", repo, "--squash", "--delete-branch"])
+    # GITHUB_TOKEN pushes do not start other workflows. workflow_dispatch does.
+    dispatch_followup(repo)
     return 0
+
+
+def dispatch_followup(repo: str) -> None:
+    """Rebuild and scan main after a squash merge. Skipped when nothing was merged."""
+    for workflow in ("build.yml", "codeql.yml"):
+        print(f"Dispatching {workflow} on main")
+        subprocess.check_call(
+            ["gh", "workflow", "run", workflow, "--repo", repo, "--ref", "main"],
+        )
 
 
 if __name__ == "__main__":

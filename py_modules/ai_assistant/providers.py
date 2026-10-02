@@ -114,8 +114,8 @@ def _auth_headers(provider: dict[str, Any]) -> dict[str, str]:
         headers["Authorization"] = f"Bearer {token}"
     host = urllib.parse.urlsplit(str(provider.get("base_url") or "")).hostname or ""
     if host == "openrouter.ai" or host.endswith(".openrouter.ai"):
-        headers["HTTP-Referer"] = "https://github.com/SMwaterSHLDhelp/AI-Assistant"
-        headers["X-Title"] = "AI Assistant"
+        headers["HTTP-Referer"] = "https://github.com/SMwaterSHLDhelp/Deckling"
+        headers["X-Title"] = "Deckling"
     return headers
 
 

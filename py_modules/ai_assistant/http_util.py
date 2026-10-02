@@ -11,7 +11,7 @@ from typing import Any
 
 from .redact import redact
 
-USER_AGENT = "AI-Assistant-Decky/0.1.0"
+USER_AGENT = "Deckling-Decky/0.1.0"
 _MAX_BODY = 8 * 1024 * 1024
 _MAX_ERROR = 8 * 1024
 
