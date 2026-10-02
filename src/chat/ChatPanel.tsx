@@ -11,6 +11,7 @@ import {
 } from "@decky/ui";
 import { useEffect, useRef, useState } from "react";
 import { cancelChat, clearSession, getState, listModels, newSession, sendMessage, switchSession } from "../api";
+import { componentReady, fieldValue, optionData } from "../form";
 import { copyText, newRequestId, runningGameName } from "../steam";
 import type { AppState, BackendEvent, ChatMessage } from "../types";
 
@@ -184,41 +185,65 @@ export function ChatPanel() {
           </PanelSectionRow>
         ) : (
           <>
-            <DropdownItem
-              label="Provider"
-              menuLabel="Provider"
-              rgOptions={providerOptions}
-              selectedOption={providerId}
-              onChange={(option) => {
-                const next = String(option.data);
-                setProviderId(next);
-                const match = state.providers.find((item) => item.id === next);
-                setModel(match?.default_model || "");
-              }}
-            />
-            {modelOptions.length > 0 ? (
+            {componentReady(DropdownItem) ? (
+              <DropdownItem
+                label="Provider"
+                menuLabel="Provider"
+                childrenContainerWidth="min"
+                rgOptions={providerOptions}
+                selectedOption={
+                  providerOptions.some((item) => item.data === providerId) ? providerId : providerOptions[0]?.data
+                }
+                onChange={(option) => {
+                  const next = optionData(option);
+                  setProviderId(next);
+                  const match = state.providers.find((item) => item.id === next);
+                  setModel(match?.default_model || "");
+                }}
+              />
+            ) : (
+              state.providers.map((item) => (
+                <ButtonItem
+                  key={item.id}
+                  layout="below"
+                  onClick={() => {
+                    setProviderId(item.id);
+                    setModel(item.default_model || "");
+                  }}
+                >
+                  {providerId === item.id ? `Using ${item.name}` : item.name}
+                </ButtonItem>
+              ))
+            )}
+            {modelOptions.length > 0 && componentReady(DropdownItem) ? (
               <DropdownItem
                 label="Model"
                 menuLabel="Model"
+                childrenContainerWidth="min"
                 rgOptions={modelOptions}
                 selectedOption={model || modelOptions[0].data}
-                onChange={(option) => setModel(String(option.data))}
+                onChange={(option) => setModel(optionData(option))}
               />
             ) : null}
             <PanelSectionRow>
-              <TextField label="Model id" value={model} onChange={(event) => setModel(event.target.value)} />
+              <TextField label="Model id" value={model} onChange={(event) => setModel(fieldValue(event))} />
             </PanelSectionRow>
           </>
         )}
-        {sessionOptions.length > 0 ? (
+        {sessionOptions.length > 0 && componentReady(DropdownItem) ? (
           <DropdownItem
             label="Conversation"
             menuLabel="Conversation"
+            childrenContainerWidth="min"
             rgOptions={sessionOptions}
-            selectedOption={state.current_session_id}
+            selectedOption={
+              sessionOptions.some((item) => item.data === state.current_session_id)
+                ? state.current_session_id
+                : sessionOptions[0]?.data
+            }
             onChange={(option) => {
               void (async () => {
-                const result = await switchSession(String(option.data));
+                const result = await switchSession(optionData(option));
                 if (!result.ok || !result.messages || !result.current_session_id) {
                   setError(result.error || "Could not open that conversation");
                   return;
@@ -232,7 +257,35 @@ export function ChatPanel() {
               })();
             }}
           />
-        ) : null}
+        ) : (
+          state.sessions.map((item) => (
+            <ButtonItem
+              key={item.id}
+              layout="below"
+              onClick={() => {
+                void (async () => {
+                  try {
+                    const result = await switchSession(item.id);
+                    if (!result.ok || !result.messages || !result.current_session_id) {
+                      setError(result.error || "Could not open that conversation");
+                      return;
+                    }
+                    setState((prev) => ({
+                      ...prev,
+                      current_session_id: result.current_session_id || prev.current_session_id,
+                      messages: result.messages || [],
+                      sessions: result.sessions || prev.sessions,
+                    }));
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : "Could not open that conversation");
+                  }
+                })();
+              }}
+            >
+              {state.current_session_id === item.id ? `Open: ${item.title || "New chat"}` : item.title || "New chat"}
+            </ButtonItem>
+          ))
+        )}
         <ButtonItem layout="below" onClick={() => void refreshSession(setState, setError, "new")}>
           New chat
         </ButtonItem>
@@ -268,7 +321,7 @@ export function ChatPanel() {
             description="Opens the on-screen keyboard"
             value={draft}
             disabled={streaming}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => setDraft(fieldValue(event))}
           />
         </PanelSectionRow>
         {streaming ? (

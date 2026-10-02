@@ -179,7 +179,22 @@ Models come from `GET /api/tags`. Chat uses `POST /api/chat` with streaming. An 
 
 ### llama.cpp server
 
-Run `llama-server` (or `server`) with the OpenAI-compatible router. The usual base URL is `http://127.0.0.1:8080/v1`. The plugin calls `GET /v1/models` and `POST /v1/chat/completions`. If you started the server with `--api-key`, put that key in the API key field. Otherwise leave the key blank.
+On the computer that has the GGUF (a PC on your LAN, or the Deck itself):
+
+```bash
+llama-server -m model.gguf --host 0.0.0.0 --port 8080
+```
+
+`--host 0.0.0.0` is what lets the Deck reach a server running on another machine. Port 8080 is llama.cpp's default. If the Deck cannot connect, allow inbound TCP 8080 on that PC's firewall (Windows Defender Firewall, ufw, or the router, depending on where the server runs).
+
+In the plugin, either base URL works:
+
+- `http://192.168.x.x:8080`
+- `http://192.168.x.x:8080/v1`
+
+Use `http://127.0.0.1:8080` when llama-server is running on the Deck. Leave the model blank when the server has a single GGUF loaded; the plugin uses the id from `GET /v1/models`. If several models are loaded, pick one. If you started the server with `--api-key`, put that same value in the API key field. Otherwise leave the key blank.
+
+While the model is still loading, llama-server answers HTTP 503. The plugin tells you to wait and try the connection again. A server that is not running, or a firewall that drops the port, is reported as a connection failure rather than a raw system error.
 
 ### Custom OpenAI-compatible
 

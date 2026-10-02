@@ -74,9 +74,13 @@ def iter_text(
     cancel: threading.Event,
     meta: dict[str, Any] | None = None,
 ) -> Iterator[str]:
-    if not model.strip():
-        raise ValueError("Choose a model")
     kind = str(provider.get("kind") or "")
+    chosen = model.strip()
+    if not chosen and kind == "llamacpp":
+        chosen = _llamacpp_default_model(provider)
+    if not chosen:
+        raise ValueError("Choose a model")
+    model = chosen
     dispatch = {
         "openai": _iter_openai,
         "hermes": _iter_openai,
@@ -114,6 +118,52 @@ def _base(provider: dict[str, Any]) -> str:
     if not base:
         raise ValueError("This provider needs a base URL")
     return base.rstrip("/")
+
+
+def _openai_root(provider: dict[str, Any]) -> str:
+    """Base URL for OpenAI-compatible routes.
+
+    llama.cpp accepts ``http://host:8080`` and ``http://host:8080/v1``. Older
+    builds only mount the ``/v1`` routes, so a missing suffix is added once.
+    """
+    base = _base(provider)
+    if provider.get("kind") != "llamacpp":
+        return base
+    path = urllib.parse.urlsplit(base).path.rstrip("/")
+    if path.endswith("/v1"):
+        return base
+    return join_url(base, "v1")
+
+
+def _explain_llamacpp(exc: Exception) -> Exception:
+    if isinstance(exc, HttpError):
+        if exc.status == 503:
+            return HttpError(
+                503,
+                "llama-server is still loading the model (HTTP 503). Wait until it is ready, then try again.",
+            )
+        if exc.status == 401:
+            return HttpError(
+                401,
+                "llama-server rejected the API key. Use the same value as --api-key, or leave the key blank if the server has none.",
+            )
+        return exc
+    if isinstance(exc, OSError):
+        return OSError(
+            "Can't reach llama-server. Check the host and port, and that the PC firewall allows this Deck on the LAN."
+        )
+    return exc
+
+
+def _llamacpp_default_model(provider: dict[str, Any]) -> str:
+    models = _list_openai_models(provider)
+    if len(models) == 1:
+        return models[0]
+    if len(models) > 1:
+        shown = ", ".join(models[:8])
+        extra = f" (+{len(models) - 8} more)" if len(models) > 8 else ""
+        raise ValueError(f"llama-server has more than one model. Choose one: {shown}{extra}")
+    raise ValueError("llama-server did not report a loaded model. Start it with -m, or type the model id.")
 
 
 def _max_tokens(provider: dict[str, Any]) -> int:
@@ -159,7 +209,17 @@ def _xai_http_message(exc: HttpError) -> str:
 def _list_openai_models(provider: dict[str, Any]) -> list[str]:
     if provider.get("kind") in {"openai", "hermes", "xai"}:
         require_credentials(provider)
-    payload = request_json("GET", join_url(_base(provider), "models"), headers=_auth_headers(provider), timeout=20)
+    try:
+        payload = request_json(
+            "GET",
+            join_url(_openai_root(provider), "models"),
+            headers=_auth_headers(provider),
+            timeout=20,
+        )
+    except (HttpError, OSError) as exc:
+        if provider.get("kind") == "llamacpp":
+            raise _explain_llamacpp(exc) from exc
+        raise
     return _ids_from_openai_payload(payload)
 
 
@@ -262,11 +322,19 @@ def _openai_delta(payload: Any) -> str:
     if not choices or not isinstance(choices[0], dict):
         return ""
     delta = choices[0].get("delta") or {}
-    if isinstance(delta, dict) and isinstance(delta.get("content"), str):
-        return delta["content"]
+    if isinstance(delta, dict):
+        # llama.cpp reasoning models (Qwen3 and similar) stream reasoning_content
+        # while content is null. Ignore null content and show whichever text arrived.
+        for key in ("content", "reasoning_content"):
+            value = delta.get(key)
+            if isinstance(value, str) and value:
+                return value
     message = choices[0].get("message") or {}
-    if isinstance(message, dict) and isinstance(message.get("content"), str):
-        return message["content"]
+    if isinstance(message, dict):
+        for key in ("content", "reasoning_content"):
+            value = message.get(key)
+            if isinstance(value, str) and value:
+                return value
     return ""
 
 
@@ -295,7 +363,7 @@ def _iter_openai(provider: dict[str, Any], messages: list[dict[str, str]], model
     try:
         lines = iter_lines(
             "POST",
-            join_url(_base(provider), "chat/completions"),
+            join_url(_openai_root(provider), "chat/completions"),
             headers=_auth_headers(provider),
             body=encoded,
             timeout=timeout,
@@ -308,6 +376,12 @@ def _iter_openai(provider: dict[str, Any], messages: list[dict[str, str]], model
     except HttpError as exc:
         if provider.get("kind") == "xai":
             raise HttpError(exc.status, _xai_http_message(exc)) from exc
+        if provider.get("kind") == "llamacpp":
+            raise _explain_llamacpp(exc) from exc
+        raise
+    except OSError as exc:
+        if provider.get("kind") == "llamacpp":
+            raise _explain_llamacpp(exc) from exc
         raise
 
 
