@@ -243,6 +243,9 @@ What the plugin can actually read:
 | Store `appdetails` | Genres, short description, developer, capsule image | Fetched when the Deck can reach `store.steampowered.com`. Cached on success. A failed request is not cached, so the next game change tries again. Shortcuts are not looked up. |
 | Steam guides and PCGamingWiki | A guides URL, or a wiki search URL | The links are built from the app id or title. The pages themselves are not downloaded. |
 | `SteamClient` rich presence, achievements, Proton tool, recent screenshot | Status string, unlocked/locked counts, compat tool name, whether a recent screenshot exists | Best effort. The panel tries the method names current Steam builds have used and ignores a missing method. There is no Steam web API key, so the global achievement schema is not downloaded. If the client does not return achievements, that part of the prompt is omitted. |
+| Web lookup | Search snippets and readable page text, with source links | On by default. DuckDuckGo HTML needs no key. A SearXNG URL, or a Brave, Tavily, or Serper key, can be set under Privacy. Results are cached for a day under `web-cache/`. Requests pause briefly per site, stop at a few hundred kilobytes, and skip pages whose robots.txt disallows them. Fandom, wiki.gg, PCGamingWiki, and Steam results are ranked first. There is no headless browser. |
+
+OpenAI, Claude, Gemini, Grok, and llama.cpp or Ollama models that accept tool calls can run `web_search` and `fetch_page` themselves. The chat shows **Searching the web…** while that happens. Models that do not accept tools get an automatic search for the current game plus your question, and the excerpts go into the prompt. Either way, the pages that were used show up as small links under the answer. **Web lookup** in Privacy turns this off. Search keys stay in `credentials.json` and are not written to the log.
 
 ## Voice replies
 

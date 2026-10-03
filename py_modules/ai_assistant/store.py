@@ -12,6 +12,7 @@ from typing import Any
 
 from .catalog import get_kind
 from .game_context import normalize_context
+from .web import normalize_web, public_web
 
 _MAX_SESSIONS = 30
 _MAX_MESSAGES = 200
@@ -314,6 +315,23 @@ class Store:
             self.save_config(config)
             return context
 
+    def update_web(self, patch: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(patch, dict):
+            raise ValueError("Web lookup settings must be an object")
+        with self._lock:
+            config = self.load_config()
+            web = normalize_web(config.get("web"))
+            for key in ("enabled", "provider", "searxng_url"):
+                if key in patch:
+                    web[key] = patch[key]
+            for key in ("brave_key", "tavily_key", "serper_key"):
+                if key in patch and patch[key] is not None:
+                    web[key] = patch[key]
+            web = normalize_web(web)
+            config["web"] = web
+            self.save_config(config)
+            return public_web(web)
+
     def update_hearing(self, patch: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(patch, dict):
             raise ValueError("Listening settings must be an object")
@@ -416,19 +434,33 @@ class Store:
             self.save_sessions(data)
             return data
 
-    def append_message(self, session_id: str, role: str, content: str) -> dict[str, Any]:
+    def append_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        sources: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
         text = content[:_MAX_CONTENT]
         with self._lock:
             data = self.load_sessions()
             match = next((item for item in data["sessions"] if item.get("id") == session_id), None)
             if match is None:
                 raise ValueError("That conversation no longer exists")
-            message = {
+            message: dict[str, Any] = {
                 "id": uuid.uuid4().hex,
                 "role": role,
                 "content": text,
                 "created_at": int(time.time()),
             }
+            if role == "assistant" and sources:
+                cleaned = []
+                for item in sources[:6]:
+                    url = str(item.get("url") or "")
+                    if url.startswith("http://") or url.startswith("https://"):
+                        cleaned.append({"title": str(item.get("title") or url)[:140], "url": url[:500]})
+                if cleaned:
+                    message["sources"] = cleaned
             messages = list(match.get("messages") or [])
             messages.append(message)
             match["messages"] = messages[-_MAX_MESSAGES:]

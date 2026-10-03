@@ -30,6 +30,7 @@ export interface ChatMessage {
   role: string;
   content: string;
   created_at: number;
+  sources?: { title: string; url: string }[];
 }
 
 export interface SessionSummary {
@@ -133,6 +134,26 @@ export function defaultContext(): ContextSettings {
   return { share_game_context: true, include_achievements: true, include_playtime: true };
 }
 
+export interface WebSettings {
+  enabled: boolean;
+  provider: string;
+  searxng_url: string;
+  has_brave_key: boolean;
+  has_tavily_key: boolean;
+  has_serper_key: boolean;
+}
+
+export function defaultWeb(): WebSettings {
+  return {
+    enabled: true,
+    provider: "duckduckgo",
+    searxng_url: "",
+    has_brave_key: false,
+    has_tavily_key: false,
+    has_serper_key: false,
+  };
+}
+
 export interface AppState {
   catalog: ProviderKindInfo[];
   providers: PublicProvider[];
@@ -147,6 +168,7 @@ export interface AppState {
   context: ContextSettings;
   game: NowPlaying | null;
   suggestions: string[];
+  web: WebSettings;
 }
 
 export interface ProviderInput {

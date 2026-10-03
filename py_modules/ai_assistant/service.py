@@ -23,6 +23,8 @@ from .screen import capture_screen, decode_supplied_image
 from .store import Store, normalize_voice, public_provider, public_session_summary
 from .vision import DEFAULT_QUESTION, jarvis_prompt, model_sees_images, vision_ids
 from .voice import VoiceEngine
+from .web import WebClient, public_web
+from .web_chat import TOOL_KINDS, ToolsUnsupported, iter_with_tools
 
 EVENT = "deckling_event"
 _GAME_NAME_LIMIT = 120
@@ -74,7 +76,30 @@ def _state_error(
         "context": context or normalize_context(None),
         "game": None,
         "suggestions": [],
+        "web": public_web(None),
     }
+
+
+def _user_question(history: list[dict[str, str]]) -> str:
+    for item in reversed(history):
+        if item.get("role") != "user":
+            continue
+        text = str(item.get("content") or "").strip()
+        if text.startswith("[Playing:") and "\n\n" in text:
+            text = text.split("\n\n", 1)[1].strip()
+        if text.startswith("[Looking at the screen]"):
+            text = text.replace("[Looking at the screen]", "", 1).strip()
+        return text
+    return ""
+
+
+def _inject_block(messages: list[dict[str, Any]], block: str) -> list[dict[str, Any]]:
+    copied = [dict(item) for item in messages]
+    if copied and copied[0].get("role") == "system":
+        copied[0]["content"] = str(copied[0].get("content") or "") + "\n\n" + block
+        return copied
+    copied.insert(0, {"role": "system", "content": block})
+    return copied
 
 
 def _about_game(name: str) -> str:
@@ -155,6 +180,7 @@ class AssistantService:
             "context": normalize_context(config.get("context")),
             "game": public_game(self._game),
             "suggestions": suggestions(self._game) if self._game.get("name") else [],
+            "web": public_web(config.get("web")),
         }
 
     def save_provider(self, incoming: dict[str, Any]) -> dict[str, Any]:
@@ -314,6 +340,11 @@ class AssistantService:
         if not self._game.get("name"):
             return []
         return suggestions(self._game)
+
+    def save_web(self, settings: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(settings, dict):
+            raise ValueError("Web lookup settings must be an object")
+        return {"ok": True, "web": self.store.update_web(settings)}
 
     def save_hearing(self, settings: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(settings, dict):
@@ -694,10 +725,36 @@ class AssistantService:
             messages = providers.prepare_messages(provider, history, prompt)
             meta["session_id"] = str(current.get("claude_session_id") or "")
             self.host.info("Chat started kind=%s model=%s screen=%s", provider.get("kind"), chosen, bool(image))
+            web_client = WebClient(os.path.join(self.store.runtime_dir, "web-cache"), config.get("web"))
+            game_name = str(self._game.get("name") or "")
+            question = _user_question(history)
+            kind_name = str(provider.get("kind") or "")
 
             def _produce(queue: asyncio.Queue[tuple[str, object]], loop: asyncio.AbstractEventLoop) -> None:
+                def _status(phase: str) -> None:
+                    asyncio.run_coroutine_threadsafe(queue.put(("web", phase)), loop).result()
+
+                outgoing = messages
+                streamed = False
                 try:
-                    for delta in providers.iter_text(provider, messages, chosen, cancel, meta, image):
+                    if web_client.enabled and not image and kind_name in TOOL_KINDS:
+                        try:
+                            for delta in iter_with_tools(provider, outgoing, chosen, cancel, web_client, _status):
+                                if cancel.is_set():
+                                    break
+                                streamed = True
+                                asyncio.run_coroutine_threadsafe(queue.put(("delta", delta)), loop).result()
+                            return
+                        except ToolsUnsupported:
+                            if streamed:
+                                return
+                    if web_client.enabled and game_name:
+                        _status("searching")
+                        block = web_client.auto(game_name, question)
+                        _status("idle")
+                        if block:
+                            outgoing = _inject_block(outgoing, block)
+                    for delta in providers.iter_text(provider, outgoing, chosen, cancel, meta, image):
                         if cancel.is_set():
                             break
                         asyncio.run_coroutine_threadsafe(queue.put(("delta", delta)), loop).result()
@@ -714,6 +771,9 @@ class AssistantService:
                     kind, payload = await queue.get()
                     if kind == "end":
                         break
+                    if kind == "web":
+                        await self._emit({"type": "web", "request_id": request_id, "phase": str(payload)})
+                        continue
                     if kind == "error":
                         raise payload if isinstance(payload, Exception) else RuntimeError(str(payload))
                     text = str(payload)
@@ -727,7 +787,7 @@ class AssistantService:
                 return
             full = "".join(collected)
             if full:
-                self.store.append_message(session_id, "assistant", full)
+                self.store.append_message(session_id, "assistant", full, web_client.sources)
             resumed_now = str(meta.get("claude_session_id") or "")
             if resumed_now:
                 self.store.set_claude_session(session_id, resumed_now)

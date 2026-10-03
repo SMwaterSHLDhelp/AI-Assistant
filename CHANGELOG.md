@@ -13,6 +13,7 @@ Move items from **Unreleased** into a version section before tagging. The releas
 - The running game is read from Steam and added to each reply as a short Game context block: name, rich presence, session time, and achievement progress when those fields are available. Non-Steam shortcuts use the shortcut name, executable, and launch options, and a ROM title is taken from the command line when it is there.
 - Public store details (genres, a short description, and the developer) are cached per app id for a week. Guides and a PCGamingWiki search link are included when the app id is a real Steam game.
 - A Now playing card at the top of the chat shows the capsule, name, rich presence line, and achievement count. Suggested prompts follow the game. Privacy has Share game context with AI, on by default, plus switches to leave achievements or playtime out of the prompt.
+- Web lookup, on by default, can search and read public pages about the current game. DuckDuckGo is the default search, with SearXNG or a Brave, Tavily, or Serper key as alternatives. Models that accept tools can call web_search and fetch_page. Other models get a short excerpt in the prompt. Pages are cached, rate-limited, and checked against robots.txt. Sources show under the answer.
 
 ## [0.1.0-rc.6] - 2026-10-03
 

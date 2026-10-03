@@ -3,6 +3,7 @@ import type {
   AppState,
   ContextSettings,
   HearingSettings,
+  WebSettings,
   NowPlaying,
   OkResult,
   ProviderInput,
@@ -57,6 +58,7 @@ export const saveContext = callable<
   [settings: Partial<ContextSettings>],
   OkResult & { context?: ContextSettings; game?: NowPlaying | null; suggestions?: string[] }
 >("save_context");
+export const saveWeb = callable<[settings: Record<string, unknown>], OkResult & { web?: WebSettings }>("save_web");
 export const saveHearing = callable<[settings: Partial<HearingSettings>], OkResult & { hearing?: HearingSettings }>(
   "save_hearing",
 );

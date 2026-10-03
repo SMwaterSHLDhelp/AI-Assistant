@@ -1,15 +1,24 @@
 import { ButtonItem, ModalRoot, Navigation, PanelSection, PanelSectionRow, TextField, showModal } from "@decky/ui";
 import { useEffect, useState } from "react";
-import { deleteProvider, getState, saveContext, saveSettings, saveVoice, testProvider } from "../api";
+import { deleteProvider, getState, saveContext, saveSettings, saveVoice, saveWeb, testProvider } from "../api";
 import { PROVIDER_KINDS, kindInfo } from "../catalog";
 import { fieldValue } from "../form";
 import { FirstRun, PRESET_KEY, QUICK_PRESETS, presetBaseUrl } from "../onboarding";
 import { errorMessage, sleep, withRetry } from "../retry";
-import type { AppState, ContextSettings, OkResult, PublicProvider } from "../types";
-import { defaultContext, defaultHearing, defaultVoice } from "../types";
+import type { AppState, ContextSettings, OkResult, PublicProvider, WebSettings } from "../types";
+import { defaultContext, defaultHearing, defaultVoice, defaultWeb } from "../types";
 import { ProviderEditor, blankDraft, draftFromProvider, type Draft } from "./ProviderEditor";
 import { HearingSection } from "./HearingSection";
 import { VoiceSection } from "./VoiceSection";
+
+const SEARCH_ORDER = ["duckduckgo", "searxng", "brave", "tavily", "serper"];
+const SEARCH_LABEL: Record<string, string> = {
+  duckduckgo: "DuckDuckGo",
+  searxng: "SearXNG",
+  brave: "Brave",
+  tavily: "Tavily",
+  serper: "Serper",
+};
 
 const emptyState = (): AppState => ({
   catalog: [],
@@ -25,6 +34,7 @@ const emptyState = (): AppState => ({
   context: defaultContext(),
   game: null,
   suggestions: [],
+  web: defaultWeb(),
 });
 
 export function SettingsPage() {
@@ -54,6 +64,7 @@ export function SettingsPage() {
       context: { ...defaultContext(), ...(loaded.context || prev.context) },
       game: loaded.game ?? prev.game,
       suggestions: loaded.suggestions ?? prev.suggestions,
+      web: { ...defaultWeb(), ...(loaded.web || prev.web) },
     }));
   };
 
@@ -202,6 +213,41 @@ export function SettingsPage() {
     }
   };
 
+  const patchWeb = async (patch: Record<string, unknown>) => {
+    try {
+      const result = await saveWeb(patch);
+      if (!result.ok || !result.web) {
+        report(result.error || "Could not save web lookup");
+        return;
+      }
+      setState((prev) => ({ ...prev, web: { ...defaultWeb(), ...result.web } }));
+    } catch (err) {
+      report(errorMessage(err, "Could not save web lookup"));
+    }
+  };
+
+  const openSearch = () => {
+    const handle = { close: () => undefined as void };
+    const opened = showModal(
+      <SearchSetup
+        web={state.web}
+        onClose={() => handle.close()}
+        onSave={(patch) => {
+          void patchWeb(patch);
+          handle.close();
+        }}
+      />,
+      window,
+    );
+    handle.close = () => opened.Close();
+  };
+
+  const cycleSearch = () => {
+    const index = SEARCH_ORDER.indexOf(state.web.provider);
+    const next = SEARCH_ORDER[(index + 1) % SEARCH_ORDER.length];
+    void patchWeb({ provider: next });
+  };
+
   const setScreen = async (enabled: boolean) => {
     const result = await saveVoice({ screen_capture: enabled });
     if (!result.ok || !result.voice) {
@@ -310,7 +356,8 @@ export function SettingsPage() {
           <div>
             Keys stay in this Deck's settings folder, mode 0600, and are not written to the log. Microphone audio stays
             on the Deck and is deleted after each line unless debug audio is on. Game context is sent only to the
-            provider you picked, and only while sharing is on. If an older copy is still in the Decky plugin list,
+            provider you picked, and only while sharing is on. Web lookup, when it is on, sends the search query and
+            the pages the model opens to that same provider. If an older copy is still in the Decky plugin list,
             uninstall that entry after your providers show up here.
           </div>
         </PanelSectionRow>
@@ -322,6 +369,15 @@ export function SettingsPage() {
         </ButtonItem>
         <ButtonItem layout="below" onClick={() => void patchContext({ include_playtime: !state.context.include_playtime })}>
           {state.context.include_playtime ? "Include playtime: on" : "Include playtime: off"}
+        </ButtonItem>
+        <ButtonItem layout="below" onClick={() => void patchWeb({ enabled: !state.web.enabled })}>
+          {state.web.enabled ? "Web lookup: on" : "Web lookup: off"}
+        </ButtonItem>
+        <ButtonItem layout="below" onClick={cycleSearch}>
+          {`Search: ${SEARCH_LABEL[state.web.provider] || "DuckDuckGo"}`}
+        </ButtonItem>
+        <ButtonItem layout="below" onClick={openSearch}>
+          Edit search setup
         </ButtonItem>
       </PanelSection>
 
@@ -481,6 +537,73 @@ function DefaultsSection({
         </PanelSectionRow>
         <ButtonItem layout="below" onClick={() => void save()}>
           Save defaults
+        </ButtonItem>
+        <ButtonItem layout="below" onClick={onClose}>
+          Cancel
+        </ButtonItem>
+      </PanelSection>
+    </ModalRoot>
+  );
+}
+
+function SearchSetup({
+  web,
+  onClose,
+  onSave,
+}: {
+  web: WebSettings;
+  onClose: () => void;
+  onSave: (patch: Record<string, string>) => void;
+}) {
+  const [url, setUrl] = useState(web.searxng_url);
+  const [key, setKey] = useState("");
+  const keyField =
+    web.provider === "brave" ? "brave_key" : web.provider === "tavily" ? "tavily_key" : web.provider === "serper" ? "serper_key" : "";
+  return (
+    <ModalRoot onCancel={onClose} bDisableBackgroundDismiss>
+      <PanelSection title="Search setup">
+        <PanelSectionRow>
+          <div>
+            DuckDuckGo needs no key. SearXNG uses an instance URL. Brave, Tavily, and Serper use an API key stored on
+            this Deck.
+          </div>
+        </PanelSectionRow>
+        {web.provider === "searxng" ? (
+          <PanelSectionRow>
+            <TextField
+              key="web-url"
+              label="SearXNG URL"
+              description="Example: https://search.example.com"
+              value={url}
+              onChange={(event) => setUrl(fieldValue(event))}
+            />
+          </PanelSectionRow>
+        ) : null}
+        {keyField ? (
+          <PanelSectionRow>
+            <TextField
+              key="web-key"
+              label="API key"
+              description="Stored with your other keys. Leave blank to keep the current key."
+              value={key}
+              onChange={(event) => setKey(fieldValue(event))}
+            />
+          </PanelSectionRow>
+        ) : null}
+        <ButtonItem
+          layout="below"
+          onClick={() => {
+            const patch: Record<string, string> = {};
+            if (web.provider === "searxng") {
+              patch.searxng_url = url;
+            }
+            if (keyField && key.trim()) {
+              patch[keyField] = key.trim();
+            }
+            onSave(patch);
+          }}
+        >
+          Save
         </ButtonItem>
         <ButtonItem layout="below" onClick={onClose}>
           Cancel

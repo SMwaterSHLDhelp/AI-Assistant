@@ -95,6 +95,9 @@ class Plugin:
     async def save_context(self, settings: dict) -> dict:
         return self._call(self.service.save_context, settings)
 
+    async def save_web(self, settings: dict) -> dict:
+        return self._call(self.service.save_web, settings)
+
     async def save_hearing(self, settings: dict) -> dict:
         return self._call(self.service.save_hearing, settings)
 

@@ -36,7 +36,7 @@ import { errorMessage, sleep, withRetry } from "../retry";
 import { bindScreenChord, prepareScreenCapture, trySteamScreenshot, wantsScreenLook } from "../screenHelp";
 import { copyText, newRequestId, runningGameName } from "../steam";
 import type { AppState, BackendEvent, ChatMessage } from "../types";
-import { defaultContext, defaultHearing, defaultVoice } from "../types";
+import { defaultContext, defaultHearing, defaultVoice, defaultWeb } from "../types";
 import type { NowPlaying } from "../types";
 import { readLiveGame } from "../gameContext";
 
@@ -54,6 +54,7 @@ const emptyState = (): AppState => ({
   context: defaultContext(),
   game: null,
   suggestions: [],
+  web: defaultWeb(),
 });
 
 export function ChatPanel() {
@@ -72,6 +73,7 @@ export function ChatPanel() {
   const [visionModels, setVisionModels] = useState<string[]>([]);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [speaking, setSpeaking] = useState(false);
+  const [searching, setSearching] = useState(false);
   const requestRef = useRef<string | null>(null);
   const streamSession = useRef("");
   const sessionRef = useRef("");
@@ -110,9 +112,14 @@ export function ChatPanel() {
         });
         return;
       }
+      if (event.type === "web" && event.request_id === requestRef.current) {
+        setSearching(event.phase === "searching");
+        return;
+      }
       if (event.type === "chat_done" && event.request_id === requestRef.current) {
         requestRef.current = null;
         setStreaming(false);
+        setSearching(false);
         if (event.session_id && event.session_id === sessionRef.current && event.messages) {
           setState((prev) => ({
             ...prev,
@@ -127,6 +134,7 @@ export function ChatPanel() {
       if (event.type === "chat_error" && event.request_id === requestRef.current) {
         requestRef.current = null;
         setStreaming(false);
+        setSearching(false);
         setError(event.error || "The provider returned an error");
         return;
       }
@@ -207,6 +215,7 @@ export function ChatPanel() {
               context: { ...defaultContext(), ...(loaded.context || {}) },
               game: loaded.game || null,
               suggestions: loaded.suggestions || [],
+              web: { ...defaultWeb(), ...(loaded.web || {}) },
             });
             const initial = loaded.default_provider_id || loaded.providers[0]?.id || "";
             setProviderId(initial);
@@ -226,6 +235,7 @@ export function ChatPanel() {
               context: { ...defaultContext(), ...(loaded.context || prev.context) },
               game: loaded.game ?? prev.game,
               suggestions: loaded.suggestions || prev.suggestions,
+              web: { ...defaultWeb(), ...(loaded.web || prev.web) },
             }));
           }
         } catch (err) {
@@ -638,6 +648,11 @@ export function ChatPanel() {
         ) : (
           state.messages.map((message) => <MessageBubble key={message.id} message={message} />)
         )}
+        {searching ? (
+          <PanelSectionRow>
+            <div style={{ fontSize: "16px" }}>Searching the web…</div>
+          </PanelSectionRow>
+        ) : null}
         {streaming ? (
           <PanelSectionRow>
             <div style={{ fontSize: "16px" }}>Deckling is writing…</div>
@@ -803,6 +818,17 @@ function NowPlayingCard({ game }: { game: NowPlaying }) {
   );
 }
 
+function openSource(url: string) {
+  const steam = (window as unknown as { SteamClient?: { System?: Record<string, unknown> } }).SteamClient;
+  const system = steam?.System;
+  const opener = system?.OpenInSystemBrowser || system?.OpenURLInClient;
+  if (typeof opener === "function") {
+    (opener as (target: string) => void).call(system, url);
+    return;
+  }
+  window.open(url, "_blank", "noopener");
+}
+
 function MessageBubble({ message }: { message: ChatMessage }) {
   const mine = message.role === "user";
   return (
@@ -827,6 +853,27 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         ) : (
           <div dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
         )}
+        {message.sources && message.sources.length > 0 ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" }}>
+            {message.sources.map((source) => (
+              <button
+                key={source.url}
+                type="button"
+                onClick={() => openSource(source.url)}
+                style={{
+                  fontSize: "13px",
+                  padding: "4px 8px",
+                  borderRadius: "999px",
+                  border: "1px solid #7fd1c3",
+                  background: "transparent",
+                  color: "#7fd1c3",
+                }}
+              >
+                {source.title || source.url}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
     </PanelSectionRow>
   );
