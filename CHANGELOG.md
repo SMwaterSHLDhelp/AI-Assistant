@@ -6,6 +6,13 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [Unreleased]
 
+## [0.1.0-rc.13] - 2026-10-03
+
+### Fixed
+
+- HTTPS no longer depends on PluginLoader's OpenSSL directory (`/usr/lib/ssl`). That path is missing on SteamOS, so `http.client` raised `SSLCertVerificationError: [SSL: CERTIFICATE_VERIFY_FAILED]`. llama.cpp treated every `OSError` as a LAN firewall problem, which is the "Can't reach llama-server" line. Requests now use a vendored certifi bundle, then `/etc/ssl/certs/ca-certificates.crt` or `/etc/ca-certificates/extracted/tls-ca-bundle.pem`. Verification stays on. A public host shows the real exception. The firewall hint is only for a LAN address or a refused connection. Test connection shows the HTTP status and how long it took. Save still works when the model list fails.
+- Saying the wake word can no longer kill the backend. The wake and speech workers were started with `sys.executable`, which inside Decky is the PluginLoader binary, not Python. That starts a second loader. Post-wake recording and transcription now run in a separate process, using the system Python. A failure is caught, shown in a toast and in Diagnostics, and the worker is started again. The plugin process keeps answering.
+
 ## [0.1.0-rc.12] - 2026-10-03
 
 ### Fixed

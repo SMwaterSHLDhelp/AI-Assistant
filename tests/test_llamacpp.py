@@ -1,13 +1,14 @@
 import asyncio
 import json
 import os
+import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 from ai_assistant.http_util import HttpError
-from ai_assistant.providers import iter_text, list_models
+from ai_assistant.providers import _explain_llamacpp, _ids_from_openai_payload, iter_text, list_models
 from ai_assistant.service import AssistantService
 
 
@@ -253,3 +254,47 @@ def test_live_llama_server() -> None:
             )
         )
         assert text.strip(), base
+
+
+def test_public_https_keeps_the_tls_error_and_lan_hint_stays_on_lan() -> None:
+    try:
+        raise ssl.SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed")
+    except ssl.SSLCertVerificationError as exc:
+        public = _explain_llamacpp(exc, {"kind": "llamacpp", "base_url": "https://llama.example.com"})
+    assert "SSLCertVerificationError" in str(public)
+    assert "CERTIFICATE_VERIFY_FAILED" in str(public)
+    assert "firewall" not in str(public).lower()
+
+    refused = _explain_llamacpp(
+        ConnectionRefusedError(111, "Connection refused"),
+        {"kind": "llamacpp", "base_url": "http://192.168.1.20:8080"},
+    )
+    assert "firewall" in str(refused)
+    public_refused = _explain_llamacpp(
+        ConnectionRefusedError(111, "Connection refused"),
+        {"kind": "llamacpp", "base_url": "https://llama.example.com"},
+    )
+    assert "firewall" in str(public_refused)
+
+
+def test_models_name_list_is_accepted_when_data_is_missing() -> None:
+    assert _ids_from_openai_payload(
+        {"models": [{"name": "qwen3.8-flash-next"}], "object": "list"}
+    ) == ["qwen3.8-flash-next"]
+    assert _ids_from_openai_payload({"data": [{"id": "from-data"}], "models": [{"name": "other"}]}) == ["from-data"]
+
+
+def test_https_context_uses_vendored_certifi_when_default_ca_is_missing(monkeypatch, tmp_path) -> None:
+    from ai_assistant import http_util
+
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing.pem"))
+    monkeypatch.setenv("SSL_CERT_DIR", str(tmp_path / "missing-dir"))
+    http_util._SSL_CONTEXT = None
+    context = http_util.ssl_context()
+    stats = context.cert_store_stats()
+    assert stats["x509_ca"] > 10
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+    bundle = http_util.ca_bundle()
+    assert bundle.endswith("cacert.pem")
+    assert os.path.isfile(bundle)

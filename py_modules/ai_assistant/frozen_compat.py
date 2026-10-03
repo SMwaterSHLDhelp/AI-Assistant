@@ -62,6 +62,9 @@ def install() -> None:
         for name, filename in _MODULES:
             if _missing(name):
                 _load(name, filename)
+        from .http_util import install_https_defaults
+
+        install_https_defaults()
     except Exception:
         _write_import_failure(traceback.format_exc())
         raise

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+import ipaddress
 import json
 import threading
 import urllib.parse
@@ -141,7 +143,46 @@ def _openai_root(provider: dict[str, Any]) -> str:
     return join_url(base, "v1")
 
 
-def _explain_llamacpp(exc: Exception) -> Exception:
+def _provider_host(provider: dict[str, Any] | None) -> str:
+    if not provider:
+        return ""
+    return urllib.parse.urlsplit(str(provider.get("base_url") or "")).hostname or ""
+
+
+def _private_host(host: str) -> bool:
+    lowered = host.lower().strip("[]").rstrip(".")
+    if not lowered:
+        return False
+    if lowered == "localhost" or lowered.endswith(".local") or lowered.endswith(".localdomain"):
+        return True
+    try:
+        address = ipaddress.ip_address(lowered)
+    except ValueError:
+        return False
+    return bool(address.is_private or address.is_loopback or address.is_link_local)
+
+
+def _connection_refused(exc: BaseException) -> bool:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ConnectionRefusedError):
+            return True
+        if getattr(current, "errno", None) in {errno.ECONNREFUSED, 111, 10061}:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _short_error(exc: Exception) -> str:
+    text = " ".join(str(exc).split())
+    if len(text) > 220:
+        text = text[:220].rstrip() + "..."
+    return f"{type(exc).__name__}: {text}"
+
+
+def _explain_llamacpp(exc: Exception, provider: dict[str, Any] | None = None) -> Exception:
     if isinstance(exc, HttpError):
         if exc.status == 503:
             return HttpError(
@@ -154,10 +195,14 @@ def _explain_llamacpp(exc: Exception) -> Exception:
                 "llama-server rejected the API key. Use the same value as --api-key, or leave the key blank if the server has none.",
             )
         return exc
-    if isinstance(exc, OSError):
+    host = _provider_host(provider)
+    # The firewall sentence hid TLS failures: SSLCertVerificationError is an OSError.
+    if isinstance(exc, OSError) and (_private_host(host) or _connection_refused(exc)):
         return OSError(
             "Can't reach llama-server. Check the host and port, and that the PC firewall allows this Deck on the LAN."
         )
+    if isinstance(exc, OSError):
+        return OSError(_short_error(exc))
     return exc
 
 
@@ -189,13 +234,25 @@ def _looks_like_chat_model(model_id: str) -> bool:
 
 
 def _ids_from_openai_payload(payload: Any) -> list[str]:
-    rows = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(rows, list):
+    if not isinstance(payload, dict):
         return []
     found: list[str] = []
-    for row in rows:
-        if isinstance(row, dict) and isinstance(row.get("id"), str):
-            found.append(row["id"])
+    rows = payload.get("data")
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict) and isinstance(row.get("id"), str) and row["id"]:
+                found.append(row["id"])
+    if found:
+        return sorted(set(found))
+    # Some llama.cpp builds list ``models[].name`` and omit ``data[].id``.
+    models = payload.get("models")
+    if isinstance(models, list):
+        for row in models:
+            if not isinstance(row, dict):
+                continue
+            name = row.get("id") or row.get("name") or row.get("model")
+            if isinstance(name, str) and name:
+                found.append(name)
     return sorted(set(found))
 
 
@@ -224,7 +281,7 @@ def _list_openai_models(provider: dict[str, Any]) -> list[str]:
         )
     except (HttpError, OSError) as exc:
         if provider.get("kind") == "llamacpp":
-            raise _explain_llamacpp(exc) from exc
+            raise _explain_llamacpp(exc, provider) from exc
         raise
     return _ids_from_openai_payload(payload)
 
@@ -389,11 +446,11 @@ def _iter_openai(
         if provider.get("kind") == "xai":
             raise HttpError(exc.status, _xai_http_message(exc)) from exc
         if provider.get("kind") == "llamacpp":
-            raise _explain_llamacpp(exc) from exc
+            raise _explain_llamacpp(exc, provider) from exc
         raise
     except OSError as exc:
         if provider.get("kind") == "llamacpp":
-            raise _explain_llamacpp(exc) from exc
+            raise _explain_llamacpp(exc, provider) from exc
         raise
 
 

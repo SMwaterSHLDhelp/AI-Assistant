@@ -8,19 +8,24 @@ whisper.cpp binary when the wheels will not install on SteamOS.
 from __future__ import annotations
 
 import array
+import json
 import math
 import os
 import shutil
 import subprocess
 import sys
 import threading
+import time
+import traceback
 import uuid
 import wave
 from collections.abc import Callable
 from typing import Any
 
 from .audio_in import capture_command, deck_audio_env
+from .diagnostics import remember
 from .http_util import USER_AGENT
+from .interpreter import frozen_runtime, system_python
 from .store import Store, normalize_hearing
 from .vad import MAX_MS, NO_SPEECH_MS, RATE, THRESHOLD, rms, speech_region
 from .vision import wants_screen_look
@@ -116,6 +121,61 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 """
+
+POST_WAKE_WORKER = """\
+import json
+import os
+import sys
+
+def main() -> int:
+    sys.path.insert(0, os.environ.get("DECKLING_PY_MODULES") or "")
+    from ai_assistant.hearing import capture_utterance
+
+    result = capture_utterance(
+        os.environ.get("DECKLING_SETTINGS") or "",
+        os.environ.get("DECKLING_RUNTIME") or "",
+        os.environ.get("DECKLING_PYTHON") or "",
+    )
+    sys.stdout.write(json.dumps(result) + "\\n")
+    sys.stdout.flush()
+    return 0 if result.get("ok") else 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
+
+
+def _failure_text(exc: BaseException) -> str:
+    text = " ".join(str(exc).split())
+    if len(text) > 240:
+        text = text[:240].rstrip() + "..."
+    return f"{type(exc).__name__}: {text}"[:300]
+
+
+def capture_utterance(settings_dir: str, runtime_dir: str, python: str) -> dict[str, Any]:
+    """Record and transcribe one line. Runs in a child process so a crash stays there."""
+    try:
+        store = Store(settings_dir, runtime_dir)
+        engine = HearingEngine(store, python=python or None)
+        engine.autostart = False
+        engine._chime()
+        engine._set_phase("recording", "Hearing you")
+        pcm = engine._record()
+        if not pcm:
+            return {"ok": True, "text": "", "empty": True}
+        engine._set_phase("transcribing", "Transcribing")
+        path = engine._keep_or_temp(pcm)
+        try:
+            text = engine.transcribe_file(path).strip()
+        finally:
+            if not engine.public()["debug_audio"]:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        return {"ok": True, "text": text, "empty": not bool(text)}
+    except BaseException as exc:
+        return {"ok": False, "error": _failure_text(exc), "trace": traceback.format_exc()[-1200:]}
 
 
 def public_hearing(config: dict[str, Any] | None, phase: str = "off") -> dict[str, Any]:
@@ -228,7 +288,7 @@ class HearingEngine:
         self.which = which or shutil.which
         self.run = run or _run
         self.machine = machine or _machine()
-        self.python = python or sys.executable
+        self.python = python or _resolve_python()
         self.autostart = True
         self._phase = "off"
         self._lock = threading.Lock()
@@ -238,6 +298,7 @@ class HearingEngine:
         self._game = False
         self._sleeping = False
         self._busy = False
+        self._last_failure = ""
 
     def public(self) -> dict[str, Any]:
         try:
@@ -344,25 +405,53 @@ class HearingEngine:
         return self._transcribe_whisper_cpp(path, hearing["stt_model"])
 
     def _loop(self) -> None:
+        """Supervise wake and post-wake. A worker failure restarts the loop."""
         try:
             self.install()
-        except Exception as exc:  # noqa: BLE001
-            self._set_phase("error", str(exc)[:300])
-            return
+        except BaseException as exc:
+            self.report_failure(exc)
+            self._stop.wait(2)
+            if self._stop.is_set():
+                return
         if self.public()["wake_error"]:
-            self._set_phase("error", self.public()["wake_error"])
-            return
+            self.report_failure(RuntimeError(self.public()["wake_error"]))
+            self._stop.wait(2)
         while not self._stop.is_set():
             if self._paused():
                 self._set_phase("paused", "Listening is paused")
                 self._stop.wait(1)
                 continue
+            started = time.monotonic()
             try:
                 if self._listen_once():
-                    self._utterance()
-            except Exception as exc:  # noqa: BLE001
-                self._set_phase("error", str(exc)[:300])
+                    self._utterance_isolated()
+            except BaseException as exc:
+                self.report_failure(exc)
                 self._stop.wait(2)
+                continue
+            if time.monotonic() - started < 1 and not self._stop.is_set():
+                self._stop.wait(2)
+
+    def report_failure(self, exc: BaseException) -> None:
+        self._surface(_failure_text(exc))
+
+    def _surface(self, message: str) -> None:
+        text = message[:300]
+        if text == self._last_failure:
+            self._phase = "error"
+            return
+        self._last_failure = text
+        remember(f"Voice pipeline: {text}")
+        self._set_phase("error", text)
+        self.notify({"type": "hearing", "phase": "error", "message": text, "toast": True})
+
+    def _argv(self, *args: str) -> list[str]:
+        if frozen_runtime() and os.path.realpath(self.python) == os.path.realpath(sys.executable):
+            raise RuntimeError(
+                "Voice models need the system Python. "
+                f"Decky's PluginLoader cannot run them ({sys.executable})."
+            )
+        return [self.python, *args]
 
     def _ptt(self) -> None:
         self._busy = True
@@ -391,6 +480,58 @@ class HearingEngine:
             self._finish_pcm(pcm)
         finally:
             self._busy = False
+
+    def _utterance_isolated(self) -> None:
+        """Post-wake work runs in another process. The plugin process only reads the result."""
+        self._busy = True
+        self.notify({"type": "hearing", "phase": "heard", "message": "Listening"})
+        try:
+            result = self._run_voice_worker()
+        except BaseException as exc:
+            self.report_failure(exc)
+            return
+        finally:
+            self._busy = False
+        if not result.get("ok"):
+            self._surface(str(result.get("error") or "voice worker failed"))
+            return
+        self._last_failure = ""
+        text = str(result.get("text") or "").strip()
+        if text:
+            self.dispatch(text)
+        phase = "listening" if self.public()["wake_enabled"] and not self._paused() else "off"
+        self._set_phase(phase, "" if text else "Didn't catch that")
+
+    def _run_voice_worker(self) -> dict[str, Any]:
+        worker = self._write_worker("post_wake_worker.py", POST_WAKE_WORKER)
+        env = os.environ.copy()
+        env.pop("LD_LIBRARY_PATH", None)
+        env["DECKLING_VOICE_WORKER"] = "1"
+        env["DECKLING_PY_MODULES"] = str(os.path.dirname(os.path.dirname(__file__)))
+        env["DECKLING_SETTINGS"] = self.store.settings_dir
+        env["DECKLING_RUNTIME"] = self.store.runtime_dir
+        env["DECKLING_PYTHON"] = self.python
+        env["PYTHONNOUSERSITE"] = "1"
+        proc = self.popen(
+            self._argv(worker),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            start_new_session=True,
+        )
+        with self._lock:
+            self._procs.append(proc)
+        try:
+            out, err = proc.communicate(timeout=120)
+        except Exception:
+            _kill(proc)
+            raise
+        payload = _last_json(out or b"")
+        if payload:
+            return payload
+        detail = (err or b"").decode("utf-8", "replace").strip()[-300:]
+        code = getattr(proc, "returncode", 1)
+        return {"ok": False, "error": detail or f"voice worker exited {code}"}
 
     def _finish_pcm(self, pcm: bytes) -> None:
         if not pcm:
@@ -424,18 +565,25 @@ class HearingEngine:
         capture, capture_env = capture_command(self.which)
         mic = self.popen(capture, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=capture_env)
         brain = self.popen(
-            [self.python, worker],
+            self._argv(worker),
             stdin=mic.stdout,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=env,
+            start_new_session=True,
         )
         with self._lock:
             self._procs.extend([mic, brain])
         try:
             assert brain.stdout is not None
             line = brain.stdout.readline()
-            return bool(line) and not self._stop.is_set()
+            if not line or self._stop.is_set():
+                return False
+            try:
+                payload = json.loads(line.decode("utf-8", "replace"))
+            except (UnicodeError, json.JSONDecodeError, ValueError):
+                return False
+            return bool(isinstance(payload, dict) and payload.get("wake"))
         finally:
             self._stop_procs()
 
@@ -504,7 +652,7 @@ class HearingEngine:
         env = deck_audio_env(os.geteuid())
         env.pop("LD_LIBRARY_PATH", None)
         env["PYTHONNOUSERSITE"] = "1"
-        command = pip_command(self.python, target, packages)
+        command = pip_command(self._argv()[0], target, packages)
         self.run(command, env)
 
     def _transcribe_whisper_cpp(self, path: str, model: str) -> str:
@@ -538,7 +686,7 @@ class HearingEngine:
         env["HUGGINGFACE_HUB_CACHE"] = os.path.join(env["HF_HOME"], "hub")
         env["HF_HUB_DISABLE_TELEMETRY"] = "1"
         completed = subprocess.run(
-            [self.python, worker, model, path, root],
+            self._argv(worker, model, path, root),
             env=env,
             capture_output=True,
             text=True,
@@ -666,3 +814,24 @@ def _machine() -> str:
     import platform
 
     return platform.machine()
+
+
+def _resolve_python() -> str:
+    try:
+        return system_python()
+    except RuntimeError:
+        return sys.executable
+
+
+def _last_json(raw: bytes) -> dict[str, Any]:
+    for line in reversed(raw.decode("utf-8", "replace").splitlines()):
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}

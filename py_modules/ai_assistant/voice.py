@@ -13,7 +13,6 @@ import platform
 import shutil
 import signal
 import subprocess
-import sys
 import tarfile
 import threading
 from collections.abc import Callable
@@ -373,7 +372,9 @@ class VoiceEngine:
             shutil.rmtree(venv, ignore_errors=True)
         if not os.path.isfile(python):
             os.makedirs(root, exist_ok=True)
-            completed = self.run([sys.executable, "-m", "venv", venv])
+            from .interpreter import system_python
+
+            completed = self.run([system_python(), "-m", "venv", venv])
             if completed.returncode != 0:
                 raise RuntimeError("Could not create a virtual environment for KittenTTS.")
             wheel = os.path.join(root, "kittentts-0.8.1-py3-none-any.whl")

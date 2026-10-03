@@ -117,7 +117,7 @@ export const moveSession = deckyCall<[sessionId: string, gameKey: string, gameLa
 export const saveChats = deckyCall<[settings: Partial<ChatSettings>], SessionResult>("save_chats");
 export const testProvider = deckyCall<
   [providerId: string],
-  OkResult & { message?: string; models?: string[]; vision_models?: string[] }
+  OkResult & { message?: string; models?: string[]; vision_models?: string[]; status?: number; latency_ms?: number }
 >("test_provider");
 export const listModels = deckyCall<[providerId: string], OkResult & { models?: string[]; vision_models?: string[] }>(
   "list_models",

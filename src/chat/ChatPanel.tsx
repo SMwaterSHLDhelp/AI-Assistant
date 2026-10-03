@@ -152,7 +152,9 @@ export function ChatPanel() {
           }));
         }
         if (event.phase === "error" && event.message) {
-          setError(nextStep(event.message));
+          const text = nextStep(event.message);
+          setError(text);
+          toaster.toast({ title: "Deckling", body: text, duration: 6000 });
         }
         if (event.phase === "sending" && event.request_id) {
           requestRef.current = event.request_id;

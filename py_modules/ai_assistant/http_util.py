@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
+import ssl
 import threading
 import urllib.parse
 from collections.abc import Iterator
@@ -14,6 +16,11 @@ from .redact import redact
 USER_AGENT = "Deckling-Decky/0.1.0"
 _MAX_BODY = 8 * 1024 * 1024
 _MAX_ERROR = 8 * 1024
+_SSL_CONTEXT: ssl.SSLContext | None = None
+_CA_CANDIDATES = (
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/ca-certificates/extracted/tls-ca-bundle.pem",
+)
 
 
 class HttpError(Exception):
@@ -44,10 +51,60 @@ def _path_of(parts: urllib.parse.SplitResult) -> str:
     return path
 
 
+def ca_bundle() -> str:
+    """CA file used for every outbound HTTPS call.
+
+    PluginLoader's OpenSSL looks in ``/usr/lib/ssl``, which SteamOS does not
+    ship. Prefer the vendored certifi bundle, then the distro bundles.
+    Verification is never disabled.
+    """
+    candidates: list[str] = []
+    try:
+        import certifi
+
+        candidates.append(certifi.where())
+    except Exception:
+        pass
+    candidates.extend(_CA_CANDIDATES)
+    seen: set[str] = set()
+    for path in candidates:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        if os.path.isfile(path):
+            return path
+    raise OSError(
+        "No CA certificate bundle was found. "
+        "HTTPS cannot be verified without certifi or the system CA file."
+    )
+
+
+def ssl_context() -> ssl.SSLContext:
+    """Verified TLS context. Cached after the first successful load."""
+    global _SSL_CONTEXT
+    if _SSL_CONTEXT is None:
+        context = ssl.create_default_context(cafile=ca_bundle())
+        if context.verify_mode == ssl.CERT_NONE:
+            raise OSError("TLS verification was disabled. Refusing to send the request.")
+        context.check_hostname = True
+        context.verify_mode = ssl.CERT_REQUIRED
+        _SSL_CONTEXT = context
+    return _SSL_CONTEXT
+
+
+def install_https_defaults() -> None:
+    """Point urllib and http.client at the vendored CA bundle."""
+
+    def _factory(*_args: object, **_kwargs: object) -> ssl.SSLContext:
+        return ssl_context()
+
+    ssl._create_default_https_context = _factory  # type: ignore[attr-defined]
+
+
 def _connection(parts: urllib.parse.SplitResult, timeout: float) -> http.client.HTTPConnection:
     host = parts.hostname or ""
     if parts.scheme == "https":
-        return http.client.HTTPSConnection(host, parts.port or 443, timeout=timeout)
+        return http.client.HTTPSConnection(host, parts.port or 443, timeout=timeout, context=ssl_context())
     return http.client.HTTPConnection(host, parts.port or 80, timeout=timeout)
 
 

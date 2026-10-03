@@ -4,6 +4,7 @@ from .frozen_compat import install
 
 # Before service.py imports pty, wave, and html.parser. Decky's frozen
 # interpreter does not ship those, and a failed import exits the process.
+# install() also points HTTPS at the vendored CA bundle.
 install()
 
 __version__ = "0.1.0"

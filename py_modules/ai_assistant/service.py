@@ -54,6 +54,19 @@ def _fail(message: str) -> dict[str, Any]:
     return {"ok": False, "error": redact(message)}
 
 
+def _public_error(exc: Exception) -> str:
+    """Keep the exception class visible. Do not replace it with a generic hint."""
+    text = " ".join(str(exc).split())
+    name = type(exc).__name__
+    if text.startswith("Can't reach") or text.startswith(name) or "Error:" in text[:80]:
+        return text[:400]
+    return f"{name}: {text}"[:400]
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((time.perf_counter() - started) * 1000))
+
+
 def _state_error(
     catalog: list[dict[str, str]],
     message: str,
@@ -256,28 +269,44 @@ class AssistantService:
 
     async def test_provider(self, provider_id: str) -> dict[str, Any]:
         provider = await self._provider_ready(provider_id)
+        started = time.perf_counter()
         try:
             models = await asyncio.to_thread(providers.list_models, provider)
         except (HttpError, ValueError, OSError, ClaudeCodeError) as exc:
             self.host.warning("Connection test failed kind=%s", provider.get("kind"))
-            message = str(exc)
+            elapsed = _elapsed_ms(started)
+            status = int(getattr(exc, "status", 0) or 0)
+            detail = _public_error(exc)
+            if status:
+                message = f"HTTP {status} in {elapsed} ms. {detail}"
+            else:
+                message = f"No HTTP response in {elapsed} ms. {detail}"
             self.store.set_connection(provider_id, "error", message)
-            return _fail(message)
+            return {**_fail(message), "status": status, "latency_ms": elapsed}
+        elapsed = _elapsed_ms(started)
         self.host.info("Connection test ok kind=%s models=%s", provider.get("kind"), len(models))
         preview = models[:50]
         if preview:
-            message = f"Connected. {len(models)} model{'s' if len(models) != 1 else ''} available."
+            detail = f"Connected. {len(models)} model{'s' if len(models) != 1 else ''} available."
         else:
-            message = "Connected, but the server did not list any models. You can still type a model id."
+            detail = "Connected, but the server did not list any models. You can still type a model id."
+        message = f"HTTP 200 in {elapsed} ms. {detail}"
         self.store.set_connection(provider_id, "connected", message)
-        return {"ok": True, "message": message, "models": preview, "vision_models": vision_ids(preview)}
+        return {
+            "ok": True,
+            "message": message,
+            "models": preview,
+            "vision_models": vision_ids(preview),
+            "status": 200,
+            "latency_ms": elapsed,
+        }
 
     async def list_models(self, provider_id: str) -> dict[str, Any]:
         provider = await self._provider_ready(provider_id)
         try:
             models = await asyncio.to_thread(providers.list_models, provider)
         except (HttpError, ValueError, OSError, ClaudeCodeError) as exc:
-            message = redact(str(exc))
+            message = redact(_public_error(exc))
             self.host.warning("Model list failed kind=%s: %s", provider.get("kind"), message)
             self.store.set_connection(provider_id, "error", message)
             return _fail(message)

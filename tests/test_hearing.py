@@ -7,6 +7,7 @@ import io
 import os
 import stat
 import subprocess
+import sys
 import tarfile
 import threading
 from pathlib import Path
@@ -14,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from ai_assistant.audio_in import capture_command, deck_audio_env
+from ai_assistant.diagnostics import snapshot
 from ai_assistant.hearing import (
     FASTER_WORKER,
     WAKE_WORKER,
@@ -22,6 +24,7 @@ from ai_assistant.hearing import (
     classify_phrase,
     threshold_for,
 )
+from ai_assistant.interpreter import system_python
 from ai_assistant.service import AssistantService
 from ai_assistant.store import Store
 from ai_assistant.vad import FRAME_MS, RATE, speech_region
@@ -402,6 +405,75 @@ def test_wake_process_env_drops_decky_library_path(tmp_path, monkeypatch) -> Non
     assert "os.nice(15)" in worker
     assert "wakeword_model_paths" in worker
     assert 'inference_framework="onnx"' in worker
+
+
+def test_loader_log_line_is_not_a_wake(tmp_path) -> None:
+    class Proc:
+        def __init__(self) -> None:
+            self.stdout = io.BytesIO(b"[main][INFO]: Starting Decky\n")
+            self.stderr = io.BytesIO(b"")
+
+        def kill(self) -> None:
+            return None
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 1
+
+    engine = _engine(tmp_path, popen=lambda *args, **kwargs: Proc(), which=_which("parec"), python="/usr/bin/python3")
+    assert engine._listen_once() is False
+
+
+def test_frozen_loader_is_not_spawned(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ai_assistant.hearing.frozen_runtime", lambda: True)
+    monkeypatch.setattr("ai_assistant.interpreter.frozen_runtime", lambda: True)
+    monkeypatch.setattr(os.path, "realpath", lambda path: path)
+    engine = _engine(tmp_path, python=sys.executable)
+    with pytest.raises(RuntimeError, match="system Python"):
+        engine._argv("worker.py")
+
+
+def test_system_python_skips_the_loader_binary(monkeypatch) -> None:
+    monkeypatch.setattr("ai_assistant.interpreter.frozen_runtime", lambda: True)
+    monkeypatch.setattr("ai_assistant.interpreter.sys.executable", "/opt/decky/PluginLoader")
+    monkeypatch.setattr("ai_assistant.interpreter.os.path.realpath", lambda path: path)
+    monkeypatch.setattr("ai_assistant.interpreter.os.access", lambda path, mode: True)
+
+    def which(name: str) -> str | None:
+        if name == "python3.13":
+            return "/usr/bin/python3"
+        return None
+
+    monkeypatch.setattr("ai_assistant.interpreter.shutil.which", which)
+    assert system_python() == "/usr/bin/python3"
+
+
+def test_post_wake_failure_is_isolated_and_recorded(tmp_path) -> None:
+    notes: list[dict] = []
+
+    class Proc:
+        returncode = 1
+
+        def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+            return (b'{"ok": false, "error": "ModuleNotFoundError: No module named audioop"}\n', b"")
+
+        def kill(self) -> None:
+            return None
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 1
+
+    engine = _engine(
+        tmp_path,
+        popen=lambda *args, **kwargs: Proc(),
+        notify=notes.append,
+        python="/usr/bin/python3",
+    )
+    engine.update({"wake_enabled": True})
+    engine._utterance_isolated()
+    assert engine._busy is False
+    assert any("audioop" in str(item.get("message") or "") for item in notes)
+    assert any("audioop" in line for line in snapshot())
+    assert engine._phase == "error"
 
 
 def test_frontend_listening_controls_and_no_bundled_models() -> None:
