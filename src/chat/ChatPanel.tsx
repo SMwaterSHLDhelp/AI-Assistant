@@ -20,6 +20,7 @@ import {
   pushToTalk,
   saveLastScreenshot,
   sendMessage,
+  setGameContext,
   setHearingActivity,
   stopListening,
   stopSpeaking,
@@ -35,7 +36,9 @@ import { errorMessage, sleep, withRetry } from "../retry";
 import { bindScreenChord, prepareScreenCapture, trySteamScreenshot, wantsScreenLook } from "../screenHelp";
 import { copyText, newRequestId, runningGameName } from "../steam";
 import type { AppState, BackendEvent, ChatMessage } from "../types";
-import { defaultHearing, defaultVoice } from "../types";
+import { defaultContext, defaultHearing, defaultVoice } from "../types";
+import type { NowPlaying } from "../types";
+import { readLiveGame } from "../gameContext";
 
 const emptyState = (): AppState => ({
   catalog: [],
@@ -48,6 +51,9 @@ const emptyState = (): AppState => ({
   messages: [],
   voice: defaultVoice(),
   hearing: defaultHearing(),
+  context: defaultContext(),
+  game: null,
+  suggestions: [],
 });
 
 export function ChatPanel() {
@@ -198,6 +204,9 @@ export function ChatPanel() {
               ...loaded,
               voice: { ...defaultVoice(), ...(loaded.voice || {}) },
               hearing: { ...defaultHearing(), ...(loaded.hearing || {}) },
+              context: { ...defaultContext(), ...(loaded.context || {}) },
+              game: loaded.game || null,
+              suggestions: loaded.suggestions || [],
             });
             const initial = loaded.default_provider_id || loaded.providers[0]?.id || "";
             setProviderId(initial);
@@ -214,6 +223,9 @@ export function ChatPanel() {
               ...loaded,
               voice: { ...defaultVoice(), ...(loaded.voice || prev.voice) },
               hearing: { ...defaultHearing(), ...(loaded.hearing || prev.hearing) },
+              context: { ...defaultContext(), ...(loaded.context || prev.context) },
+              game: loaded.game ?? prev.game,
+              suggestions: loaded.suggestions || prev.suggestions,
             }));
           }
         } catch (err) {
@@ -258,6 +270,75 @@ export function ChatPanel() {
     const timer = window.setInterval(() => setGame(runningGameName()), 2000);
     setGame(runningGameName());
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let lastKey = "";
+    const tick = async () => {
+      const snapshot = await readLiveGame();
+      if (cancelled) {
+        return;
+      }
+      const key = [
+        snapshot.appid,
+        snapshot.name,
+        snapshot.exe,
+        snapshot.launch_options,
+        snapshot.rich_presence,
+        snapshot.achievements_unlocked,
+      ].join("|");
+      if (key === lastKey) {
+        return;
+      }
+      lastKey = key;
+      if (!snapshot.name) {
+        setState((prev) => ({ ...prev, game: null, suggestions: [] }));
+        try {
+          await setGameContext({ ...snapshot });
+        } catch {
+          // The card is already clear. The next poll retries the backend.
+        }
+        return;
+      }
+      const local: NowPlaying = {
+        appid: snapshot.appid,
+        name: snapshot.name,
+        rich_presence: snapshot.rich_presence,
+        achievements_unlocked: snapshot.achievements_unlocked,
+        achievements_total: snapshot.achievements_total,
+        capsule: "",
+        emulator: "",
+        shortcut: snapshot.shortcut,
+        sources: snapshot.sources,
+      };
+      try {
+        const result = await setGameContext({ ...snapshot });
+        if (cancelled) {
+          return;
+        }
+        if (result.ok) {
+          setState((prev) => ({
+            ...prev,
+            game: result.game === undefined ? local : result.game,
+            suggestions: result.suggestions || [],
+            context: result.context ? { ...defaultContext(), ...result.context } : prev.context,
+          }));
+          return;
+        }
+      } catch {
+        // Store lookup can fail offline. The Steam fields still fill the card.
+      }
+      if (!cancelled) {
+        setState((prev) => ({ ...prev, game: local }));
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -521,6 +602,7 @@ export function ChatPanel() {
         .deckling-bubble code { font-size: 14px; }
       `}</style>
       <PanelSection title="Deckling">
+        {state.game ? <NowPlayingCard game={state.game} /> : null}
         <PanelSectionRow>
           <div style={{ fontSize: "14px", opacity: 0.85 }}>A tiny companion in your menu.</div>
         </PanelSectionRow>
@@ -581,6 +663,11 @@ export function ChatPanel() {
         <ButtonItem layout="below" disabled={!providerId || streaming} onClick={() => void send("", "Summarize this conversation in a few sentences.")}>
           Summarize
         </ButtonItem>
+        {state.suggestions.map((prompt) => (
+          <ButtonItem key={prompt} layout="below" disabled={!providerId || streaming} onClick={() => void send("", prompt)}>
+            {prompt}
+          </ButtonItem>
+        ))}
       </PanelSection>
 
       <PanelSection title="Message">
@@ -686,6 +773,33 @@ export function ChatPanel() {
         </ButtonItem>
       </PanelSection>
     </>
+  );
+}
+
+function NowPlayingCard({ game }: { game: NowPlaying }) {
+  const progress =
+    game.achievements_total && game.achievements_unlocked != null
+      ? `Achievements ${game.achievements_unlocked}/${game.achievements_total}`
+      : "";
+  return (
+    <PanelSectionRow>
+      <div style={{ display: "flex", gap: "10px", alignItems: "center", padding: "4px 0 8px" }}>
+        {game.capsule ? (
+          <img src={game.capsule} alt="" width={92} height={43} style={{ borderRadius: "4px", objectFit: "cover" }} />
+        ) : (
+          <div
+            aria-hidden
+            style={{ width: "44px", height: "44px", borderRadius: "8px", background: "#1b3a4a", flex: "0 0 auto" }}
+          />
+        )}
+        <div>
+          <div style={{ fontSize: "12px", letterSpacing: "0.04em", opacity: 0.7 }}>Now playing</div>
+          <div style={{ fontSize: "16px" }}>{game.name}</div>
+          {game.rich_presence ? <div style={{ fontSize: "14px" }}>{game.rich_presence}</div> : null}
+          {progress ? <div style={{ fontSize: "14px" }}>{progress}</div> : null}
+        </div>
+      </div>
+    </PanelSectionRow>
   );
 }
 

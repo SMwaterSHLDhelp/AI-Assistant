@@ -1,7 +1,9 @@
 import { callable } from "@decky/api";
 import type {
   AppState,
+  ContextSettings,
   HearingSettings,
+  NowPlaying,
   OkResult,
   ProviderInput,
   PublicProvider,
@@ -47,6 +49,14 @@ export const sendMessage = callable<
 >("send_message");
 export const cancelChat = callable<[requestId: string], OkResult>("cancel_chat");
 export const saveVoice = callable<[settings: Partial<VoiceSettings>], OkResult & { voice?: VoiceSettings }>("save_voice");
+export const setGameContext = callable<
+  [snapshot: Record<string, unknown>],
+  OkResult & { game?: NowPlaying | null; suggestions?: string[]; context?: ContextSettings }
+>("set_game_context");
+export const saveContext = callable<
+  [settings: Partial<ContextSettings>],
+  OkResult & { context?: ContextSettings; game?: NowPlaying | null; suggestions?: string[] }
+>("save_context");
 export const saveHearing = callable<[settings: Partial<HearingSettings>], OkResult & { hearing?: HearingSettings }>(
   "save_hearing",
 );

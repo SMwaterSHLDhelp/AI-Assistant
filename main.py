@@ -89,6 +89,12 @@ class Plugin:
     async def cancel_chat(self, request_id: str) -> dict:
         return self._call(self.service.cancel_chat, request_id)
 
+    async def set_game_context(self, snapshot: dict) -> dict:
+        return self._call(self.service.set_game_context, snapshot)
+
+    async def save_context(self, settings: dict) -> dict:
+        return self._call(self.service.save_context, settings)
+
     async def save_hearing(self, settings: dict) -> dict:
         return self._call(self.service.save_hearing, settings)
 

@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from . import claude_code, oauth, providers
 from .catalog import catalog_payload, get_kind
 from .claude_code import ClaudeCodeError
+from .game_context import enrich_store, format_block, normalize_context, prepare_snapshot, public_game, suggestions
 from .hearing import HearingEngine
 from .http_util import HttpError
 from .imageutil import to_jpeg
@@ -55,6 +56,7 @@ def _state_error(
     message: str,
     voice: dict[str, Any],
     hearing: dict[str, Any],
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "ok": False,
@@ -69,6 +71,9 @@ def _state_error(
         "messages": [],
         "voice": voice,
         "hearing": hearing,
+        "context": context or normalize_context(None),
+        "game": None,
+        "suggestions": [],
     }
 
 
@@ -108,6 +113,7 @@ class AssistantService:
             self.hearing.start()
         self.screen_grabbers = None
         self._last_jpeg: bytes | None = None
+        self._game: dict[str, Any] = {}
 
     def state(self) -> dict[str, Any]:
         # The catalog is static data. A broken settings or chat file must not hide it.
@@ -117,12 +123,18 @@ class AssistantService:
         try:
             config = self.store.load_config()
         except (OSError, ValueError) as exc:
-            return _state_error(catalog, f"Could not read saved settings: {exc}", voice, hearing)
+            return _state_error(catalog, f"Could not read saved settings: {exc}", voice, hearing, normalize_context(None))
         try:
             sessions, current = self.store.ensure_session()
         except (OSError, ValueError) as exc:
             return {
-                **_state_error(catalog, f"Could not read saved chats: {exc}", voice, hearing),
+                **_state_error(
+                    catalog,
+                    f"Could not read saved chats: {exc}",
+                    voice,
+                    hearing,
+                    normalize_context(config.get("context")),
+                ),
                 "providers": [public_provider(item) for item in config.get("providers") or []],
                 "default_provider_id": config.get("default_provider_id") or "",
                 "default_model": config.get("default_model") or "",
@@ -140,6 +152,9 @@ class AssistantService:
             "messages": list(current.get("messages") or []),
             "voice": voice,
             "hearing": hearing,
+            "context": normalize_context(config.get("context")),
+            "game": public_game(self._game),
+            "suggestions": suggestions(self._game) if self._game.get("name") else [],
         }
 
     def save_provider(self, incoming: dict[str, Any]) -> dict[str, Any]:
@@ -266,6 +281,39 @@ class AssistantService:
             return {"ok": True, "message": "Nothing to stop"}
         cancel.set()
         return {"ok": True}
+
+    def _with_game_context(self, prompt: str, config: dict[str, Any]) -> str:
+        block = format_block(self._game, normalize_context(config.get("context")))
+        if not block:
+            return prompt
+        return f"{prompt}\n\n{block}".strip() if prompt else block
+
+    def save_context(self, settings: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(settings, dict):
+            raise ValueError("Game context settings must be an object")
+        context = self.store.update_context(settings)
+        return {"ok": True, "context": context, "game": public_game(self._game), "suggestions": self._suggestions()}
+
+    def set_game_context(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(snapshot, dict):
+            raise ValueError("Game context must be an object")
+        game = prepare_snapshot(snapshot)
+        if game.get("name"):
+            try:
+                enrich_store(game, os.path.join(self.store.runtime_dir, "game-cache"))
+            except Exception:
+                # Store data is optional. The Steam client fields still go in the prompt.
+                pass
+        else:
+            game = {}
+        self._game = game
+        context = normalize_context(self.store.load_config().get("context"))
+        return {"ok": True, "context": context, "game": public_game(self._game), "suggestions": self._suggestions()}
+
+    def _suggestions(self) -> list[str]:
+        if not self._game.get("name"):
+            return []
+        return suggestions(self._game)
 
     def save_hearing(self, settings: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(settings, dict):
@@ -599,7 +647,7 @@ class AssistantService:
             session_id,
             cancel,
             image=jpeg,
-            system_override=jarvis_prompt(game),
+            system_override=self._with_game_context(jarvis_prompt(game), self.store.load_config()),
             history_override=[{"role": "user", "content": question}],
         )
 
@@ -642,7 +690,7 @@ class AssistantService:
                     for item in (current.get("messages") or [])
                     if item.get("role") in {"user", "assistant"}
                 ]
-                prompt = str(config.get("system_prompt") or "")
+                prompt = self._with_game_context(str(config.get("system_prompt") or ""), config)
             messages = providers.prepare_messages(provider, history, prompt)
             meta["session_id"] = str(current.get("claude_session_id") or "")
             self.host.info("Chat started kind=%s model=%s screen=%s", provider.get("kind"), chosen, bool(image))

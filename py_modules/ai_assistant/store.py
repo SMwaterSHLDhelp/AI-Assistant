@@ -11,6 +11,7 @@ import uuid
 from typing import Any
 
 from .catalog import get_kind
+from .game_context import normalize_context
 
 _MAX_SESSIONS = 30
 _MAX_MESSAGES = 200
@@ -298,6 +299,20 @@ class Store:
                     item["connection_detail"] = str(detail or "")[:300]
                     self.save_config(config)
                     return
+
+    def update_context(self, patch: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(patch, dict):
+            raise ValueError("Game context settings must be an object")
+        with self._lock:
+            config = self.load_config()
+            context = normalize_context(config.get("context"))
+            for key in context:
+                if key in patch:
+                    context[key] = patch[key]
+            context = normalize_context(context)
+            config["context"] = context
+            self.save_config(config)
+            return context
 
     def update_hearing(self, patch: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(patch, dict):

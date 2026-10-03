@@ -230,6 +230,20 @@ Open **Deckling** in the Quick Access Menu.
 
 Each request also includes the system prompt from settings, if you set one. The model sees the latest 40 messages.
 
+While a game is running, a **Now playing** card sits at the top of the chat: capsule art when the store has it, the game name, the rich presence line, and achievements as x/y. Suggested prompts under the chat follow that game, for example where to go next or how to unlock the next achievement. **Ask about the current game** still puts the Steam name in that one message, because you pressed the button.
+
+The same snapshot is turned into a compact **Game context** block on the system prompt for each turn, and on a screen-help turn, when sharing is on. Only fields that were actually read are included. The block refreshes when the game, the ROM command line, the rich presence line, or the achievement count changes. Store details are cached per app id under the plugin data directory (`game-cache/`, mode `0600`) for seven days.
+
+What the plugin can actually read:
+
+| Source | What it provides | How sure |
+| --- | --- | --- |
+| `Router.MainRunningApp` and the app overview | App id, name, playtime, last played, shortcut flag, executable, launch options | Used for the card and the prompt. Covered by tests with a mocked overview. |
+| Shortcut command line | ROM title for RetroArch, EmuDeck, and similar emulators | Parsed locally. Covered by tests. A title that is not a path with a known ROM extension is left as the shortcut name. |
+| Store `appdetails` | Genres, short description, developer, capsule image | Fetched when the Deck can reach `store.steampowered.com`. Cached on success. A failed request is not cached, so the next game change tries again. Shortcuts are not looked up. |
+| Steam guides and PCGamingWiki | A guides URL, or a wiki search URL | The links are built from the app id or title. The pages themselves are not downloaded. |
+| `SteamClient` rich presence, achievements, Proton tool, recent screenshot | Status string, unlocked/locked counts, compat tool name, whether a recent screenshot exists | Best effort. The panel tries the method names current Steam builds have used and ignores a missing method. There is no Steam web API key, so the global achievement schema is not downloaded. If the client does not return achievements, that part of the prompt is omitted. |
+
 ## Voice replies
 
 Spoken replies are off until you turn them on in settings. Two engines are available:
@@ -280,6 +294,7 @@ The answer uses a short Jarvis-style prompt: a few spoken sentences, friendly, a
 ## Privacy
 
 - Chat text is sent only to the provider URL you configured. This plugin has no separate telemetry server.
+- **Share game context with AI** is on by default. While it is on, the Game context block goes to that same provider with each message. **Include achievements** and **Include playtime** drop those fields from the prompt. The Now playing card on this Deck can still show them. Turning sharing off removes the block. Store cache files stay on the Deck.
 - A screen-help screenshot is sent only to that same provider, only when you ask about the screen, and only if screen capture is enabled. It is not written into `sessions.json`. It stays on disk only if you press **Save screenshot**.
 - The microphone stays on this Deck. Wake-word scores and transcripts are computed locally. Audio is discarded after each line unless **Debug audio** is on. Those recordings are mode `0600` under the plugin data directory.
 - API keys, OAuth client secrets, access tokens, and refresh tokens live in `credentials.json` under Decky's settings directory for this plugin. The directory is mode `0700` and the file is mode `0600`.

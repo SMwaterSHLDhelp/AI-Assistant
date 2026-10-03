@@ -1,12 +1,12 @@
 import { ButtonItem, ModalRoot, Navigation, PanelSection, PanelSectionRow, TextField, showModal } from "@decky/ui";
 import { useEffect, useState } from "react";
-import { deleteProvider, getState, saveSettings, saveVoice, testProvider } from "../api";
+import { deleteProvider, getState, saveContext, saveSettings, saveVoice, testProvider } from "../api";
 import { PROVIDER_KINDS, kindInfo } from "../catalog";
 import { fieldValue } from "../form";
 import { FirstRun, PRESET_KEY, QUICK_PRESETS, presetBaseUrl } from "../onboarding";
 import { errorMessage, sleep, withRetry } from "../retry";
-import type { AppState, OkResult, PublicProvider } from "../types";
-import { defaultHearing, defaultVoice } from "../types";
+import type { AppState, ContextSettings, OkResult, PublicProvider } from "../types";
+import { defaultContext, defaultHearing, defaultVoice } from "../types";
 import { ProviderEditor, blankDraft, draftFromProvider, type Draft } from "./ProviderEditor";
 import { HearingSection } from "./HearingSection";
 import { VoiceSection } from "./VoiceSection";
@@ -22,6 +22,9 @@ const emptyState = (): AppState => ({
   messages: [],
   voice: defaultVoice(),
   hearing: defaultHearing(),
+  context: defaultContext(),
+  game: null,
+  suggestions: [],
 });
 
 export function SettingsPage() {
@@ -48,6 +51,9 @@ export function SettingsPage() {
       messages: loaded.messages ?? prev.messages,
       voice: { ...defaultVoice(), ...(loaded.voice || prev.voice) },
       hearing: { ...defaultHearing(), ...(loaded.hearing || prev.hearing) },
+      context: { ...defaultContext(), ...(loaded.context || prev.context) },
+      game: loaded.game ?? prev.game,
+      suggestions: loaded.suggestions ?? prev.suggestions,
     }));
   };
 
@@ -183,6 +189,19 @@ export function SettingsPage() {
     }
   };
 
+  const patchContext = async (patch: Partial<ContextSettings>) => {
+    try {
+      const result = await saveContext(patch);
+      if (!result.ok || !result.context) {
+        report(result.error || "Could not save game context");
+        return;
+      }
+      setState((prev) => ({ ...prev, context: { ...defaultContext(), ...result.context } }));
+    } catch (err) {
+      report(errorMessage(err, "Could not save game context"));
+    }
+  };
+
   const setScreen = async (enabled: boolean) => {
     const result = await saveVoice({ screen_capture: enabled });
     if (!result.ok || !result.voice) {
@@ -290,10 +309,20 @@ export function SettingsPage() {
         <PanelSectionRow>
           <div>
             Keys stay in this Deck's settings folder, mode 0600, and are not written to the log. Microphone audio stays
-            on the Deck and is deleted after each line unless debug audio is on. If an older copy is still in the Decky
-            plugin list, uninstall that entry after your providers show up here.
+            on the Deck and is deleted after each line unless debug audio is on. Game context is sent only to the
+            provider you picked, and only while sharing is on. If an older copy is still in the Decky plugin list,
+            uninstall that entry after your providers show up here.
           </div>
         </PanelSectionRow>
+        <ButtonItem layout="below" onClick={() => void patchContext({ share_game_context: !state.context.share_game_context })}>
+          {state.context.share_game_context ? "Share game context with AI: on" : "Share game context with AI: off"}
+        </ButtonItem>
+        <ButtonItem layout="below" onClick={() => void patchContext({ include_achievements: !state.context.include_achievements })}>
+          {state.context.include_achievements ? "Include achievements: on" : "Include achievements: off"}
+        </ButtonItem>
+        <ButtonItem layout="below" onClick={() => void patchContext({ include_playtime: !state.context.include_playtime })}>
+          {state.context.include_playtime ? "Include playtime: on" : "Include playtime: off"}
+        </ButtonItem>
       </PanelSection>
 
       <PanelSection title="Advanced">

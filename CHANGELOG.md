@@ -6,6 +6,14 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [Unreleased]
 
+## [0.1.0-rc.7] - 2026-10-03
+
+### Added
+
+- The running game is read from Steam and added to each reply as a short Game context block: name, rich presence, session time, and achievement progress when those fields are available. Non-Steam shortcuts use the shortcut name, executable, and launch options, and a ROM title is taken from the command line when it is there.
+- Public store details (genres, a short description, and the developer) are cached per app id for a week. Guides and a PCGamingWiki search link are included when the app id is a real Steam game.
+- A Now playing card at the top of the chat shows the capsule, name, rich presence line, and achievement count. Suggested prompts follow the game. Privacy has Share game context with AI, on by default, plus switches to leave achievements or playtime out of the prompt.
+
 ## [0.1.0-rc.6] - 2026-10-03
 
 ### Changed

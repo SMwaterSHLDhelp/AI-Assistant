@@ -111,6 +111,28 @@ export function defaultVoice(): VoiceSettings {
   };
 }
 
+export interface ContextSettings {
+  share_game_context: boolean;
+  include_achievements: boolean;
+  include_playtime: boolean;
+}
+
+export interface NowPlaying {
+  appid: number;
+  name: string;
+  rich_presence: string;
+  achievements_unlocked: number | null;
+  achievements_total: number | null;
+  capsule: string;
+  emulator: string;
+  shortcut: boolean;
+  sources: string[];
+}
+
+export function defaultContext(): ContextSettings {
+  return { share_game_context: true, include_achievements: true, include_playtime: true };
+}
+
 export interface AppState {
   catalog: ProviderKindInfo[];
   providers: PublicProvider[];
@@ -122,6 +144,9 @@ export interface AppState {
   messages: ChatMessage[];
   voice: VoiceSettings;
   hearing: HearingSettings;
+  context: ContextSettings;
+  game: NowPlaying | null;
+  suggestions: string[];
 }
 
 export interface ProviderInput {
