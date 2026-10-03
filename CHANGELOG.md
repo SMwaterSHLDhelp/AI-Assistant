@@ -6,6 +6,14 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [Unreleased]
 
+## [0.1.0-rc.16] - 2026-10-03
+
+### Fixed
+
+- Web lookup treats HTTP 202 and any page with no results as a miss, then tries the next source. The order is DuckDuckGo HTML (browser GET), DuckDuckGo lite, then Bing HTML. A 202 is retried once with the cookies from that response and a short random pause. Test web lookup names the backend that answered. If every keyless source fails, the error says to add a SearXNG URL or a Brave or Tavily key.
+- After you send a message, a thinking bubble appears immediately, with a typing indicator, a status line (Thinking, Searching the web, Reading pages, Looking at your screen, Writing), and an elapsed time after 3 seconds. The reply still streams into that bubble. Reasoning tokens stay on the Thinking line instead of being written as the answer. Stop stays on screen. A soft tick while thinking is in Voice settings and is off by default.
+- Screen capture runs as the deck user when Decky is root, with `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, `GAMESCOPE_WAYLAND_DISPLAY`, and `DISPLAY`. It tries `gamescopectl screenshot`, grim, the gamescope control socket, PipeWire, then a recent Steam shot under `/home/deck`. A failed Steam path falls through to that chain. The error on screen includes which step failed. Screen help has Test screen capture, which shows a thumbnail or the error. llama.cpp at the Watercrest host accepts an OpenAI image part and described a solid red test JPEG as red.
+
 ## [0.1.0-rc.15] - 2026-10-03
 
 ### Fixed

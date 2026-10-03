@@ -236,6 +236,39 @@ def beep_pcm(rate: int = RATE, ms: int = 140, freq: int = 880) -> bytes:
     return samples.tobytes()
 
 
+def tick_pcm(rate: int = RATE, ms: int = 40, freq: int = 520) -> bytes:
+    """A quiet click used while a reply is still being written. Off unless enabled."""
+    count = rate * ms // 1000
+    samples = array.array("h")
+    for index in range(count):
+        fade = math.sin(math.pi * index / max(1, count))
+        samples.append(int(fade * 0.08 * 32767 * math.sin(2 * math.pi * freq * index / rate)))
+    return samples.tobytes()
+
+
+def play_pcm(pcm: bytes) -> None:
+    from .voice import playback_command
+
+    try:
+        argv, env = playback_command(RATE, shutil.which)
+    except RuntimeError:
+        return
+    proc = subprocess.Popen(
+        argv,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+    )
+    try:
+        if proc.stdin is not None:
+            proc.stdin.write(pcm)
+            proc.stdin.close()
+        proc.wait(timeout=2)
+    except Exception:
+        _kill(proc)
+
+
 def done_pcm(rate: int = RATE, ms: int = 220) -> bytes:
     """A short descending tone, distinct from the wake-word ding."""
     count = rate * ms // 1000

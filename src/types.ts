@@ -32,6 +32,7 @@ export interface ChatMessage {
   content: string;
   created_at: number;
   sources?: { title: string; url: string }[];
+  status?: string;
 }
 
 export interface SessionSummary {
@@ -76,6 +77,7 @@ export interface HearingSettings {
   battery_saver: boolean;
   debug_audio: boolean;
   done_sound: boolean;
+  thinking_tick: boolean;
   wake_error: string;
   stt_backend: string;
   install_message: string;
@@ -96,6 +98,7 @@ export function defaultHearing(): HearingSettings {
     battery_saver: false,
     debug_audio: false,
     done_sound: true,
+    thinking_tick: false,
     wake_error: "",
     stt_backend: "",
     install_message: "",

@@ -13,6 +13,7 @@ import {
   saveWeb,
   subscribeFailures,
   testProvider,
+  testScreen,
   testWeb,
   writeDiagnostics,
 } from "../api";
@@ -75,6 +76,9 @@ export function SettingsPage({ layout = "stack" }: { layout?: "stack" | "tabs" }
   const [privacyOpen, setPrivacyOpen] = useState(false);
   const [webTest, setWebTest] = useState("");
   const [webTesting, setWebTesting] = useState(false);
+  const [screenTest, setScreenTest] = useState("");
+  const [screenShot, setScreenShot] = useState("");
+  const [screenTesting, setScreenTesting] = useState(false);
 
   const report = (message: string) => {
     setError(message);
@@ -460,6 +464,38 @@ export function SettingsPage({ layout = "stack" }: { layout?: "stack" | "tabs" }
       <DeckRow layout="below" onClick={() => void setScreen(!state.voice.screen_capture)}>
         {state.voice.screen_capture ? "Screen capture: on" : "Screen capture: off"}
       </DeckRow>
+      <DeckRow
+        layout="below"
+        onClick={() => {
+          if (screenTesting) {
+            return;
+          }
+          setScreenTesting(true);
+          setScreenTest("Capturing…");
+          setScreenShot("");
+          void testScreen().then((result) => {
+            setScreenTesting(false);
+            if (!result.ok || !result.image_b64) {
+              setScreenTest(result.error || "Could not capture the screen");
+              return;
+            }
+            setScreenShot(`data:image/jpeg;base64,${result.image_b64}`);
+            setScreenTest(`Captured ${result.bytes || 0} bytes.`);
+          });
+        }}
+      >
+        {screenTesting ? "Testing screen capture…" : "Test screen capture"}
+      </DeckRow>
+      {screenShot ? (
+        <PanelSectionRow>
+          <img alt="Captured screen" src={screenShot} style={{ width: "100%", borderRadius: "6px" }} />
+        </PanelSectionRow>
+      ) : null}
+      {screenTest ? (
+        <PanelSectionRow>
+          <div style={{ whiteSpace: "pre-wrap" }}>{screenTest}</div>
+        </PanelSectionRow>
+      ) : null}
     </PanelSection>,
   );
 
@@ -521,7 +557,8 @@ export function SettingsPage({ layout = "stack" }: { layout?: "stack" | "tabs" }
                 }
                 const lines = (result.results || []).map((item) => `${item.title || item.url}\n${item.url}`);
                 const excerpt = result.excerpt ? `\n\n${result.excerpt}` : "";
-                setWebTest(lines.length ? `${lines.join("\n\n")}${excerpt}` : "No results.");
+                const who = result.backend ? `Answered by ${result.backend}\n\n` : "";
+                setWebTest(lines.length ? `${who}${lines.join("\n\n")}${excerpt}` : "No results.");
               });
             }}
           >

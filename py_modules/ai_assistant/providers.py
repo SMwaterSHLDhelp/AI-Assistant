@@ -7,7 +7,7 @@ import ipaddress
 import json
 import threading
 import urllib.parse
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from . import claude_code, vision
@@ -89,6 +89,7 @@ def iter_text(
     cancel: threading.Event,
     meta: dict[str, Any] | None = None,
     image: bytes | None = None,
+    on_status: Callable[[str], None] | None = None,
 ) -> Iterator[str]:
     kind = str(provider.get("kind") or "")
     chosen = model.strip()
@@ -118,6 +119,9 @@ def iter_text(
         raise ValueError(f"Unknown provider type: {kind}")
     if kind == "claude_code":
         yield from _iter_claude(provider, messages, model.strip(), cancel, meta)
+        return
+    if handler is _iter_openai:
+        yield from _iter_openai(provider, messages, model.strip(), cancel, image, on_status)
         return
     yield from handler(provider, messages, model.strip(), cancel, image)
 
@@ -458,8 +462,14 @@ def _merge_roles(messages: list[dict[str, str]], assistant_role: str) -> list[di
 
 
 def _openai_delta(payload: Any) -> str:
+    thought, text = _openai_parts(payload)
+    return text or thought
+
+
+def _openai_parts(payload: Any) -> tuple[str, str]:
+    """Split a chunk into reasoning and the visible reply. Null content is ignored."""
     if not isinstance(payload, dict):
-        return ""
+        return "", ""
     error = payload.get("error")
     if isinstance(error, dict):
         raise HttpError(400, redact(str(error.get("message") or error))[:400])
@@ -467,22 +477,21 @@ def _openai_delta(payload: Any) -> str:
         raise HttpError(400, redact(error)[:400])
     choices = payload.get("choices") or []
     if not choices or not isinstance(choices[0], dict):
-        return ""
+        return "", ""
+    thought = ""
+    text = ""
     delta = choices[0].get("delta") or {}
-    if isinstance(delta, dict):
-        # llama.cpp reasoning models (Qwen3 and similar) stream reasoning_content
-        # while content is null. Ignore null content and show whichever text arrived.
-        for key in ("content", "reasoning_content"):
-            value = delta.get(key)
-            if isinstance(value, str) and value:
-                return value
     message = choices[0].get("message") or {}
-    if isinstance(message, dict):
-        for key in ("content", "reasoning_content"):
-            value = message.get(key)
-            if isinstance(value, str) and value:
-                return value
-    return ""
+    for source in (delta, message):
+        if not isinstance(source, dict):
+            continue
+        content = source.get("content")
+        if isinstance(content, str) and content:
+            text += content
+        reasoning = source.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning:
+            thought += reasoning
+    return thought, text
 
 
 def _iter_claude(
@@ -501,6 +510,7 @@ def _iter_openai(
     model: str,
     cancel: threading.Event,
     image: bytes | None = None,
+    on_status: Callable[[str], None] | None = None,
 ) -> Iterator[str]:
     if provider.get("kind") in {"openai", "hermes", "xai"}:
         require_credentials(provider)
@@ -522,10 +532,21 @@ def _iter_openai(
             timeout=timeout,
             cancel=cancel,
         )
+        reasoning: list[str] = []
+        wrote = False
         for event in iter_sse_json(lines):
-            text = _openai_delta(event)
+            thought, text = _openai_parts(event)
+            if thought:
+                reasoning.append(thought)
+                if on_status:
+                    on_status("thinking")
             if text:
+                wrote = True
+                if on_status:
+                    on_status("writing")
                 yield text
+        if not wrote and reasoning:
+            yield "".join(reasoning)
     except HttpError as exc:
         if provider.get("kind") == "xai":
             raise HttpError(exc.status, _xai_http_message(exc)) from exc

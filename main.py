@@ -3,7 +3,7 @@ import sys
 # Single event name the Quick Access panel and the settings page both listen for.
 EVENT = "deckling_event"
 LEGACY_NAME = "AI Assistant"
-VERSION = "0.1.0-rc.15"
+VERSION = "0.1.0-rc.16"
 _BOOT_ERROR = ""
 _BOOT_TRACE = ""
 
@@ -251,6 +251,9 @@ class Plugin:
 
     async def test_web(self, query: str = "") -> dict:
         return await self._acall("test_web", query)
+
+    async def test_screen(self) -> dict:
+        return await self._acall("test_screen")
 
     async def save_hearing(self, settings: dict) -> dict:
         return self._call("save_hearing", settings)

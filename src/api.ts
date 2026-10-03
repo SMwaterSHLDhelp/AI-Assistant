@@ -145,10 +145,12 @@ export const testWeb = deckyCall<
   [query?: string],
   OkResult & {
     query?: string;
+    backend?: string;
     results?: { title: string; url: string; snippet?: string }[];
     excerpt?: string;
   }
 >("test_web");
+export const testScreen = deckyCall<[], OkResult & { image_b64?: string; bytes?: number }>("test_screen");
 export const saveHearing = deckyCall<[settings: Partial<HearingSettings>], OkResult & { hearing?: HearingSettings }>(
   "save_hearing",
 );

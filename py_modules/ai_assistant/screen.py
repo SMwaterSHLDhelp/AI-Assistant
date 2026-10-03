@@ -12,6 +12,7 @@ import binascii
 import glob
 import json
 import os
+import shutil
 import socket
 import stat
 import subprocess
@@ -43,6 +44,7 @@ class CaptureContext:
         self.run = run
         self.timeout = timeout
         self.started = started
+        self.errors: list[str] = []
 
 
 def capture_screen(
@@ -61,20 +63,78 @@ def capture_screen(
         raise CaptureError("Screen capture is turned off in settings.")
     if not qam_hidden:
         raise CaptureError("Hide the Quick Access Menu before taking the shot.")
+    display = deck_display_env(env)
     context = CaptureContext(
         runtime_dir=runtime_dir,
         tmp_dir=tmp_dir,
-        env=dict(env or os.environ),
-        run=run or _default_run,
+        env=display,
+        run=run or (lambda args: _execute(args, display, max(timeout, 8))),
         timeout=timeout,
         started=time.time() if started is None else started,
     )
-    steps = grabbers or [grab_gamescope, grab_pipewire, grab_recent_file]
+    steps = grabbers or [grab_external, grab_gamescope, grab_pipewire, grab_recent_file]
     for grab in steps:
-        data = grab(context)
+        try:
+            data = grab(context)
+        except CaptureError as exc:
+            context.errors.append(str(exc))
+            continue
         if data:
             return data
-    raise CaptureError("Could not capture the game screen. Gamescope, Steam, and PipeWire did not return a shot.")
+    detail = " ".join(context.errors)[:480]
+    if not detail:
+        detail = "Gamescope, grim, and PipeWire did not return a shot."
+    raise CaptureError(f"Could not capture the game screen. {detail}")
+
+
+def deck_display_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """Wayland and X11 for the deck user, including when the plugin runs as root."""
+    from .audio_in import deck_audio_env
+
+    env = deck_audio_env()
+    if base:
+        for key, value in base.items():
+            if key != "LD_LIBRARY_PATH" and value is not None:
+                env[key] = str(value)
+    runtime = env.get("XDG_RUNTIME_DIR") or "/run/user/1000"
+    env["XDG_RUNTIME_DIR"] = runtime
+    wayland = _wayland_name(runtime)
+    if wayland:
+        env["WAYLAND_DISPLAY"] = wayland
+        if "gamescope" in wayland:
+            env["GAMESCOPE_WAYLAND_DISPLAY"] = wayland
+    env.setdefault("GAMESCOPE_WAYLAND_DISPLAY", "gamescope-0")
+    env.setdefault("WAYLAND_DISPLAY", env["GAMESCOPE_WAYLAND_DISPLAY"])
+    if os.path.exists("/tmp/.X11-unix/X1"):
+        env.setdefault("DISPLAY", ":1")
+    else:
+        env.setdefault("DISPLAY", ":0")
+    return env
+
+
+def grab_external(context: CaptureContext) -> bytes | None:
+    """gamescopectl and grim, as the deck user, with the gamescope Wayland display."""
+    dest = os.path.join(context.tmp_dir, f"deckling-shot-{os.getpid()}.png")
+    commands = (
+        ["gamescopectl", "screenshot", dest],
+        ["grim", "-t", "png", dest],
+    )
+    for argv in commands:
+        if shutil.which(argv[0]) is None:
+            context.errors.append(f"{argv[0]} is not installed")
+            continue
+        try:
+            _execute(argv, context.env, context.timeout)
+        except (OSError, subprocess.SubprocessError) as exc:
+            context.errors.append(f"{argv[0]}: {' '.join(str(exc).split())[:160]}")
+            continue
+        found = _wait_for_file(dest, min(context.timeout, 1.5))
+        if found:
+            unlink_temp(dest, context)
+            return found
+        context.errors.append(f"{argv[0]} did not write a screenshot")
+    unlink_temp(dest, context)
+    return None
 
 
 def grab_gamescope(context: CaptureContext) -> bytes | None:
@@ -92,6 +152,7 @@ def grab_gamescope(context: CaptureContext) -> bytes | None:
         except OSError:
             continue
     if not sockets:
+        context.errors.append(f"No gamescope socket in {runtime}")
         return None
     dest = os.path.join(context.tmp_dir, f"gamescope-deckling-{os.getpid()}.png")
     for sock_path in sockets:
@@ -110,6 +171,7 @@ def grab_gamescope(context: CaptureContext) -> bytes | None:
         if found:
             unlink_temp(dest, context)
             return found
+    context.errors.append("Gamescope control socket did not write a screenshot")
     unlink_temp(dest, context)
     return None
 
@@ -118,10 +180,12 @@ def grab_pipewire(context: CaptureContext) -> bytes | None:
     try:
         dumped = context.run(["pw-dump"])
         nodes = json.loads(dumped)
-    except (OSError, json.JSONDecodeError, subprocess.SubprocessError):
+    except (OSError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+        context.errors.append(f"pw-dump: {' '.join(str(exc).split())[:140]}")
         return None
     node_id = _gamescope_video_node(nodes)
     if node_id is None:
+        context.errors.append("No gamescope PipeWire video node")
         return None
     dest = os.path.join(context.tmp_dir, f"gamescope-pw-{os.getpid()}.png")
     try:
@@ -239,13 +303,14 @@ def _wait_for_file(path: str, timeout: float) -> bytes | None:
 def _read_allowed_path(path: str, runtime_dir: str, tmp_dir: str) -> bytes:
     real = os.path.realpath(path)
     roots = [os.path.realpath(tmp_dir), os.path.realpath(runtime_dir)]
-    home = os.path.expanduser("~")
-    for extra in (
-        os.path.join(home, ".local", "share", "Steam", "userdata"),
-        os.path.join(home, ".steam", "steam", "userdata"),
-    ):
-        if os.path.isdir(extra):
-            roots.append(os.path.realpath(extra))
+    homes = [os.path.expanduser("~"), "/home/deck"]
+    for home in homes:
+        for extra in (
+            os.path.join(home, ".local", "share", "Steam", "userdata"),
+            os.path.join(home, ".steam", "steam", "userdata"),
+        ):
+            if os.path.isdir(extra):
+                roots.append(os.path.realpath(extra))
     if not any(real == root or real.startswith(root + os.sep) for root in roots):
         raise CaptureError("Could not read that screenshot.")
     try:
@@ -271,9 +336,35 @@ def _looks_like_image(data: bytes) -> bool:
     return data.startswith(b"\x89PNG") or data.startswith(b"\xff\xd8")
 
 
-def _default_run(args: list[str]) -> str:
-    completed = subprocess.run(args, check=False, capture_output=True, timeout=8)
+def _wayland_name(runtime: str) -> str:
+    if not os.path.isdir(runtime):
+        return ""
+    try:
+        names = os.listdir(runtime)
+    except OSError:
+        return ""
+    for candidate in ("gamescope-0", "wayland-0", "wayland-1"):
+        if candidate in names:
+            return candidate
+    for name in names:
+        if name.startswith("wayland") or name.startswith("gamescope"):
+            return name
+    return ""
+
+
+def _execute(args: list[str], env: dict[str, str], timeout: float) -> str:
+    argv = list(args)
+    if os.geteuid() == 0:
+        runuser = shutil.which("runuser")
+        if not runuser:
+            raise OSError("Deckling is running as root and cannot switch to the deck user for the screenshot.")
+        argv = [runuser, "-u", "deck", "--preserve-environment", "--", *argv]
+    completed = subprocess.run(argv, env=env, check=False, capture_output=True, timeout=timeout)
     if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", "replace")[:200]
+        detail = completed.stderr.decode("utf-8", "replace").strip()[:200]
         raise OSError(detail or f"{args[0]} failed")
     return completed.stdout.decode("utf-8", "replace")
+
+
+def _default_run(args: list[str]) -> str:
+    return _execute(args, deck_display_env(), 8)

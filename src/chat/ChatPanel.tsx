@@ -36,6 +36,10 @@ import type { SessionResult } from "./ChatList";
 import type { NowPlaying } from "../types";
 import { readLiveGame } from "../gameContext";
 
+function thinkingBubble(id: string, status: string): ChatMessage {
+  return { id, role: "assistant", content: "", created_at: Date.now() / 1000, status };
+}
+
 const emptyState = (): AppState => ({
   catalog: [],
   providers: [],
@@ -69,7 +73,6 @@ export function ChatPanel() {
   const [visionModels, setVisionModels] = useState<string[]>([]);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [speaking, setSpeaking] = useState(false);
-  const [searching, setSearching] = useState(false);
   const requestRef = useRef<string | null>(null);
   const streamSession = useRef("");
   const sessionRef = useRef("");
@@ -108,14 +111,24 @@ export function ChatPanel() {
         });
         return;
       }
-      if (event.type === "web" && event.request_id === requestRef.current) {
-        setSearching(event.phase === "searching");
+      if (event.type === "status" && event.request_id === requestRef.current) {
+        const label = event.message || "Thinking...";
+        const requestId = event.request_id;
+        setState((prev) => {
+          const messages = [...prev.messages];
+          const index = messages.findIndex((item) => item.id === requestId && item.role === "assistant");
+          if (index >= 0) {
+            messages[index] = { ...messages[index], status: label };
+          } else {
+            messages.push(thinkingBubble(requestId, label));
+          }
+          return { ...prev, messages };
+        });
         return;
       }
       if (event.type === "chat_done" && event.request_id === requestRef.current) {
         requestRef.current = null;
         setStreaming(false);
-        setSearching(false);
         if (event.session_id && event.session_id === sessionRef.current && event.messages) {
           setState((prev) => ({
             ...prev,
@@ -128,10 +141,14 @@ export function ChatPanel() {
         return;
       }
       if (event.type === "chat_error" && event.request_id === requestRef.current) {
+        const requestId = event.request_id;
         requestRef.current = null;
         setStreaming(false);
-        setSearching(false);
         setError(event.error || "The provider returned an error");
+        setState((prev) => ({
+          ...prev,
+          messages: prev.messages.filter((item) => item.id !== requestId || item.content),
+        }));
         return;
       }
       if (event.type === "hearing") {
@@ -152,7 +169,8 @@ export function ChatPanel() {
           toaster.toast({ title: "Deckling", body: text, duration: 6000 });
         }
         if (event.phase === "sending" && event.request_id) {
-          requestRef.current = event.request_id;
+          const requestId = event.request_id;
+          requestRef.current = requestId;
           setStreaming(true);
           const transcript = event.transcript || event.message || "";
           if (transcript) {
@@ -161,11 +179,12 @@ export function ChatPanel() {
               messages: [
                 ...prev.messages,
                 {
-                  id: `voice-${event.request_id}`,
+                  id: `voice-${requestId}`,
                   role: "user",
                   content: transcript,
                   created_at: Date.now() / 1000,
                 },
+                thinkingBubble(requestId, "Thinking..."),
               ],
             }));
           }
@@ -420,6 +439,10 @@ export function ChatPanel() {
     setStreaming(true);
     setError("");
     setSuggestions([]);
+    setState((prev) => ({
+      ...prev,
+      messages: [...prev.messages, thinkingBubble(requestId, "Looking at your screen...")],
+    }));
     try {
       await stopSpeaking();
       const shot = await prepareScreenCapture(() => Navigation.CloseSideMenus(), sleep, trySteamScreenshot);
@@ -429,6 +452,7 @@ export function ChatPanel() {
         setStreaming(false);
         setError(result.error || "Could not look at the screen");
         setSuggestions(result.suggestions || []);
+        setState((prev) => ({ ...prev, messages: prev.messages.filter((item) => item.id !== requestId) }));
         return;
       }
       setDraft("");
@@ -443,6 +467,7 @@ export function ChatPanel() {
       requestRef.current = null;
       setStreaming(false);
       setError(errorMessage(err, "Could not look at the screen"));
+      setState((prev) => ({ ...prev, messages: prev.messages.filter((item) => item.id !== requestId) }));
     }
   };
   lookRef.current = (question?: string) => look(question ?? draft);
@@ -480,13 +505,11 @@ export function ChatPanel() {
       return;
     }
     setDraft("");
-    if (result.messages) {
-      setState((prev) => ({
-        ...prev,
-        messages: result.messages ?? prev.messages,
-        sessions: result.sessions ?? prev.sessions,
-      }));
-    }
+    setState((prev) => ({
+      ...prev,
+      messages: [...(result.messages || prev.messages), thinkingBubble(requestId, "Thinking...")],
+      sessions: result.sessions ?? prev.sessions,
+    }));
   };
 
   const stop = async () => {
@@ -593,6 +616,21 @@ export function ChatPanel() {
         .deckling-bubble ul { margin: 0 0 8px; padding-left: 18px; }
         .deckling-bubble pre { margin: 0 0 8px; padding: 8px; overflow-x: auto; background: #0e141b; border-radius: 6px; }
         .deckling-bubble code { font-size: 14px; }
+        .deckling-dots span {
+          display: inline-block;
+          width: 6px;
+          height: 6px;
+          margin-right: 4px;
+          border-radius: 50%;
+          background: #8b9bb4;
+          animation: deckling-blink 1.2s infinite;
+        }
+        .deckling-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .deckling-dots span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes deckling-blink {
+          0%, 80%, 100% { opacity: 0.2; }
+          40% { opacity: 1; }
+        }
       `}</style>
       <PanelSection title="Deckling">
         {loading ? (
@@ -622,18 +660,10 @@ export function ChatPanel() {
             </div>
           </PanelSectionRow>
         ) : (
-          state.messages.map((message) => <MessageBubble key={message.id} message={message} />)
+          state.messages.map((message) => (
+            <MessageBubble key={message.id} message={message} live={streaming && message.id === requestRef.current} />
+          ))
         )}
-        {searching ? (
-          <PanelSectionRow>
-            <div style={{ fontSize: "16px" }}>Searching the web…</div>
-          </PanelSectionRow>
-        ) : null}
-        {streaming ? (
-          <PanelSectionRow>
-            <div style={{ fontSize: "16px" }}>Deckling is writing…</div>
-          </PanelSectionRow>
-        ) : null}
         <div ref={bottomRef} />
         {error ? (
           <PanelSectionRow>
@@ -721,8 +751,22 @@ function openSource(url: string) {
   window.open(url, "_blank", "noopener");
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const seconds = Math.floor(now / 1000 - since);
+  if (seconds < 3) {
+    return null;
+  }
+  return <span> · {seconds}s</span>;
+}
+
+function MessageBubble({ message, live }: { message: ChatMessage; live: boolean }) {
   const mine = message.role === "user";
+  const waiting = live && !message.content;
   return (
     <PanelSectionRow>
       <div
@@ -742,9 +786,21 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         <div style={{ opacity: 0.7, fontSize: "13px", marginBottom: "4px" }}>{mine ? "You" : "Deckling"}</div>
         {mine ? (
           <div style={{ whiteSpace: "pre-wrap" }}>{message.content}</div>
+        ) : waiting ? (
+          <div className="deckling-dots" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
         ) : (
           <div dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
         )}
+        {live && message.status ? (
+          <div style={{ opacity: 0.75, fontSize: "13px", marginTop: "6px" }}>
+            {message.status}
+            <Elapsed since={message.created_at} />
+          </div>
+        ) : null}
         {message.sources && message.sources.length > 0 ? (
           <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" }}>
             {message.sources.map((source) => (

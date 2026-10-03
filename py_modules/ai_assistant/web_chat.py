@@ -161,12 +161,18 @@ def iter_with_tools(
     prepared = _with_hint(messages)
     notify = on_status or (lambda _phase: None)
 
+    pages = {"n": 0}
+
     def execute(name: str, arguments: dict[str, Any]) -> str:
-        notify("searching")
+        if name == "fetch_page":
+            pages["n"] += 1
+            notify(f"reading:{pages['n']}")
+        else:
+            notify("searching")
         try:
             return run_tool(client, name, arguments)
         finally:
-            notify("idle")
+            notify("thinking")
 
     if kind == "anthropic":
         yield from _anthropic_tools(provider, prepared, model, cancel, execute)
@@ -177,7 +183,7 @@ def iter_with_tools(
     if kind == "ollama":
         yield from _ollama_tools(provider, prepared, model, cancel, execute)
         return
-    yield from _openai_tools(provider, prepared, model, cancel, execute)
+    yield from _openai_tools(provider, prepared, model, cancel, execute, notify)
 
 
 def _openai_tools(
@@ -186,6 +192,7 @@ def _openai_tools(
     model: str,
     cancel: threading.Event,
     execute: Executor,
+    notify: Status | None = None,
 ) -> Iterator[str]:
     if provider.get("kind") in {"openai", "hermes", "xai"}:
         require_credentials(provider)
@@ -205,7 +212,9 @@ def _openai_tools(
             "tools": tools,
             token_field: _max_tokens(provider),
         }
-        text, calls, reasoning = yield from _stream_openai(provider, url, body, timeout, cancel, emit=False)
+        text, calls, reasoning = yield from _stream_openai(
+            provider, url, body, timeout, cancel, emit=False, notify=notify
+        )
         if not calls:
             calls = text_tool_calls(text) + text_tool_calls(reasoning)
         if not calls and not looked_up and wants_lookup(f"{text}\n{reasoning}"):
@@ -244,7 +253,7 @@ def _openai_tools(
     if cancel.is_set():
         return
     body = {"model": model, "messages": working, "stream": True, token_field: _max_tokens(provider)}
-    yield from _stream_openai(provider, url, body, timeout, cancel)
+    yield from _stream_openai(provider, url, body, timeout, cancel, notify=notify)
 
 
 def _without_tool_tags(text: str) -> str:
@@ -276,6 +285,7 @@ def _stream_openai(
     timeout: float,
     cancel: threading.Event,
     emit: bool = True,
+    notify: Status | None = None,
 ) -> Iterator[str]:
     calls: dict[int, dict[str, str]] = {}
     text_parts: list[str] = []
@@ -313,10 +323,14 @@ def _stream_openai(
                 if isinstance(content, str) and content:
                     text_parts.append(content)
                     if emit:
+                        if notify:
+                            notify("writing")
                         yield content
                 reasoning = source.get("reasoning_content") or source.get("reasoning")
                 if isinstance(reasoning, str) and reasoning:
                     reasoning_parts.append(reasoning)
+                    if notify:
+                        notify("thinking")
                 for tool in source.get("tool_calls") or []:
                     if isinstance(tool, dict):
                         _absorb_tool(calls, tool)

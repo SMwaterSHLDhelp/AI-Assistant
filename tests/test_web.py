@@ -32,6 +32,32 @@ def _fetch_factory(pages: dict[str, tuple[int, bytes]]):
     return fetch
 
 
+BING = (
+    b'<li class="b_algo"><h2><a href="https://www.bing.com/ck/a?'
+    b'u=a1aHR0cHM6Ly93d3cucGNnYW1pbmd3aWtpLmNvbS93aWtpL0VsZGVuX1Jpbmc&amp;ntb=1">'
+    b"Elden Ring</a></h2><p>A big tree.</p></li>"
+)
+
+
+def test_http_202_falls_through_to_bing(tmp_path) -> None:
+    calls: list[str] = []
+
+    def fetch(url, timeout, max_bytes, headers=None, body=None, method="GET"):  # noqa: ARG001
+        calls.append(url)
+        if "duckduckgo" in url:
+            return 202, b"<html>anomaly-modal</html>"
+        if "bing.com" in url:
+            return 200, BING
+        return 404, b""
+
+    client = WebClient(str(tmp_path), {"provider": "duckduckgo"}, fetch=fetch, sleep=lambda _seconds: None)
+    found = client.search("Elden Ring grace", now=10)
+    assert found[0]["url"] == "https://www.pcgamingwiki.com/wiki/Elden_Ring"
+    assert client.last_backend == "Bing"
+    assert any("duckduckgo" in url for url in calls)
+    assert any("bing.com" in url for url in calls)
+
+
 def test_search_prefers_game_wikis_and_caches(tmp_path) -> None:
     calls: list[str] = []
 
@@ -238,7 +264,7 @@ def test_qwen_tool_tag_and_spoken_intent_both_search(tmp_path, monkeypatch) -> N
 
     def fetch(url, timeout, max_bytes, headers=None, body=None, method="GET"):  # noqa: ARG001
         if "duckduckgo" in url:
-            assert method == "POST"
+            assert method == "GET"
             return 200, DDG
         return 200, PAGE
 

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import gzip
 import hashlib
 import http.client
 import ipaddress
 import json
 import os
+import random
+import re
 import time
 import urllib.parse
 import urllib.robotparser
@@ -122,6 +125,7 @@ def fetch_url(
     method: str = "GET",
 ) -> tuple[int, bytes]:
     """Fetch one public URL, following a few redirects. Status codes are returned, not raised."""
+    fetch_url.set_cookies = []  # type: ignore[attr-defined]
     current = url
     payload = body
     verb = method.upper()
@@ -160,6 +164,12 @@ def fetch_url(
                     raw = gzip.decompress(raw)
                 except (OSError, EOFError, gzip.BadGzipFile):
                     pass
+            cookies: list[str] = []
+            for value in response.msg.get_all("Set-Cookie") or []:
+                pair = str(value).split(";", 1)[0].strip()
+                if "=" in pair:
+                    cookies.append(pair)
+            fetch_url.set_cookies = cookies  # type: ignore[attr-defined]
             return status, raw
         finally:
             conn.close()
@@ -272,6 +282,69 @@ def _duck_target(href: str) -> str:
     return href
 
 
+def _browser_headers(referer: str = "") -> dict[str, str]:
+    headers = {
+        "User-Agent": BROWSER_UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+    }
+    if referer:
+        headers["Referer"] = referer
+    return headers
+
+
+def _blocked_page(page: str) -> bool:
+    lowered = page.lower()
+    if "unfortunately, bots" in lowered or "anomaly-modal" in lowered:
+        return True
+    if "captcha" in lowered and "result__a" not in lowered and "b_algo" not in lowered:
+        return True
+    return False
+
+
+def _bing_target(href: str) -> str:
+    text = urllib.parse.unquote(href.replace("&amp;", "&"))
+    if text.startswith("http") and "bing.com/ck/" not in text:
+        return text
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(text).query)
+    token = (query.get("u") or [""])[0]
+    if token.startswith("a1"):
+        payload = token[2:]
+        payload += "=" * (-len(payload) % 4)
+        try:
+            decoded = base64.b64decode(payload).decode("utf-8", "replace")
+        except (ValueError, UnicodeError):
+            return ""
+        if decoded.startswith("http"):
+            return decoded
+    return ""
+
+
+def parse_bing(page: str) -> list[dict[str, str]]:
+    found: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for block in re.findall(r'<li class="b_algo".*?</li>', page, re.I | re.S):
+        match = re.search(r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block, re.I | re.S)
+        if not match:
+            continue
+        url = _bing_target(match.group(1))
+        title = " ".join(re.sub(r"<[^>]+>", "", match.group(2)).split())
+        if not url.startswith("http") or url in seen:
+            continue
+        seen.add(url)
+        snippet_match = re.search(r'<p[^>]*>(.*?)</p>', block, re.I | re.S)
+        snippet = " ".join(re.sub(r"<[^>]+>", " ", snippet_match.group(1)).split()) if snippet_match else ""
+        found.append({"title": title, "url": url, "snippet": snippet})
+        if len(found) >= MAX_RESULTS:
+            break
+    return found
+
+
 def parse_duckduckgo(page: str) -> list[dict[str, str]]:
     parser = _DuckParser()
     try:
@@ -320,6 +393,8 @@ class WebClient:
         self._seen: dict[str, float] = {}
         self.enabled = bool(self.settings["enabled"])
         self.last_error = ""
+        self.last_backend = ""
+        self._cookies: dict[str, str] = {}
 
     def search(self, query: str, now: float | None = None) -> list[dict[str, str]]:
         text = " ".join(str(query or "").split())[:300]
@@ -327,10 +402,12 @@ class WebClient:
             return []
         stamp = time.time() if now is None else now
         self.last_error = ""
+        self.last_backend = ""
         cached = self._read_cache("search", self._search_key(text), stamp)
         if isinstance(cached, list):
             results = [item for item in cached if isinstance(item, dict)]
             self._remember(results)
+            self.last_backend = "saved results"
             return results
         try:
             results = self._search_live(text)
@@ -404,53 +481,52 @@ class WebClient:
             return self._tavily(query)
         if provider == "serper":
             return self._serper(query)
-        return self._duckduckgo(query)
+        return self._keyless(query)
 
-    def _duckduckgo(self, query: str) -> list[dict[str, str]]:
-        form = urllib.parse.urlencode({"q": query, "kl": "us-en"}).encode("utf-8")
-        headers = {
-            "User-Agent": BROWSER_UA,
-            "Accept": "text/html,application/xhtml+xml",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Referer": "https://html.duckduckgo.com/",
-        }
-        errors: list[str] = []
-        query_string = urllib.parse.urlencode({"q": query})
-        attempts: tuple[tuple[str, str, bytes | None], ...] = (
-            ("POST", "https://html.duckduckgo.com/html/", form),
-            ("GET", "https://html.duckduckgo.com/html/?" + query_string, None),
-            ("POST", "https://lite.duckduckgo.com/lite/", form),
-            ("GET", "https://lite.duckduckgo.com/lite/?" + query_string, None),
+    def _keyless(self, query: str) -> list[dict[str, str]]:
+        """DuckDuckGo, then Bing. HTTP 202 and empty pages are failures, not results."""
+        encoded = urllib.parse.urlencode({"q": query})
+        steps: tuple[tuple[str, str, str], ...] = (
+            ("DuckDuckGo", "https://html.duckduckgo.com/html/?" + encoded, "https://html.duckduckgo.com/"),
+            ("DuckDuckGo lite", "https://lite.duckduckgo.com/lite/?" + encoded, "https://lite.duckduckgo.com/"),
+            ("Bing", "https://www.bing.com/search?" + encoded, "https://www.bing.com/"),
         )
-        for method, url, payload in attempts:
+        errors: list[str] = []
+        for label, url, referer in steps:
+            page, problem = self._fetch_search(url, referer)
+            if problem:
+                errors.append(f"{label}: {problem}")
+                continue
+            results = parse_bing(page) if label == "Bing" else parse_duckduckgo(page)
+            if results:
+                self.last_backend = label
+                return results
+            errors.append(f"{label}: no results")
+        detail = errors[-1] if errors else "no results"
+        raise ValueError(
+            f"Web lookup failed ({detail}). Add a SearXNG URL, or a Brave or Tavily key, in Privacy and Web."
+        )
+
+    def _fetch_search(self, url: str, referer: str) -> tuple[str, str]:
+        headers = _browser_headers(referer)
+        last = "no response"
+        for attempt in range(2):
+            if attempt:
+                self.sleep(random.uniform(0.2, 0.7))
             try:
-                _url, status, body = self._get_public(
-                    url,
-                    SEARCH_TIMEOUT,
-                    MAX_PAGE_BYTES,
-                    headers=headers,
-                    body=payload,
-                    method=method,
-                )
+                _url, status, body = self._get_public(url, SEARCH_TIMEOUT, MAX_PAGE_BYTES, headers=headers)
             except Exception as exc:
-                errors.append(" ".join(str(exc).split())[:180])
+                last = " ".join(str(exc).split())[:180]
                 continue
             if status == 202 or status >= 400:
-                errors.append(f"DuckDuckGo returned HTTP {status}")
+                last = f"HTTP {status}"
                 continue
             page = body.decode("utf-8", "replace")
-            results = parse_duckduckgo(page)
-            if results:
-                return results
-            lowered = page.lower()
-            if "anomaly" in lowered or "captcha" in lowered or "unfortunately, bots" in lowered:
-                errors.append("DuckDuckGo asked for a browser check")
-            else:
-                errors.append("DuckDuckGo returned no results")
-        if errors:
-            raise ValueError(errors[-1])
-        return []
+            if _blocked_page(page):
+                last = "bot check"
+                continue
+            return page, ""
+        return "", last
 
     def _searxng(self, query: str) -> list[dict[str, str]]:
         base = self.settings["searxng_url"].rstrip("/")
@@ -527,15 +603,32 @@ class WebClient:
         headers: dict[str, str] | None = None,
         body: bytes | None = None,
         method: str = "GET",
-    ) -> tuple[str, bytes]:
+    ) -> tuple[str, int, bytes]:
         host = _host(url)
         if blocked_host(host):
             raise ValueError("That address is not a public web page")
         self._pace(host)
-        status, raw = self.fetch(url, timeout, max_bytes, headers=headers, body=body, method=method)
+        outgoing = dict(headers or {})
+        cookie = self._cookie_header()
+        if cookie:
+            outgoing["Cookie"] = cookie
+        status, raw = self.fetch(url, timeout, max_bytes, headers=outgoing, body=body, method=method)
+        self._absorb_cookies()
         if status >= 400:
             raise ValueError(f"The site returned HTTP {status}")
         return url, status, raw
+
+    def _cookie_header(self) -> str:
+        return "; ".join(f"{name}={value}" for name, value in self._cookies.items())
+
+    def _absorb_cookies(self) -> None:
+        for pair in getattr(self.fetch, "set_cookies", []) or []:
+            if not isinstance(pair, str) or "=" not in pair:
+                continue
+            name, value = pair.split("=", 1)
+            name = name.strip()
+            if name:
+                self._cookies[name[:80]] = value.strip()[:300]
 
     def _pace(self, host: str) -> None:
         now = self.clock()

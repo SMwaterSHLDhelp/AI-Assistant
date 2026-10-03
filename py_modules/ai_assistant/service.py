@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 import secrets
@@ -20,7 +21,7 @@ from .http_util import HttpError
 from .imageutil import to_jpeg
 from .oauth import OAuthError
 from .redact import redact
-from .screen import capture_screen, decode_supplied_image
+from .screen import CaptureError, capture_screen, decode_supplied_image
 from .store import Store, normalize_voice, public_provider, public_session_summary
 from .vision import DEFAULT_QUESTION, jarvis_prompt, model_can_see, vision_ids
 from .voice import VoiceEngine
@@ -93,6 +94,20 @@ def _state_error(
         "web": public_web(None),
         "chats": normalize_chats(None),
     }
+
+
+def _status_text(phase: str) -> str:
+    if phase == "searching":
+        return "Searching the web..."
+    if phase.startswith("reading"):
+        count = phase.split(":", 1)[-1] if ":" in phase else "1"
+        noun = "page" if count == "1" else "pages"
+        return f"Reading {count} {noun}..."
+    if phase == "writing":
+        return "Writing..."
+    if phase == "screen":
+        return "Looking at your screen..."
+    return "Thinking..."
 
 
 def _user_question(history: list[dict[str, str]]) -> str:
@@ -434,8 +449,21 @@ class AssistantService:
             page = client.fetch_page(str(results[0].get("url") or ""))
             excerpt = " ".join(str(page.get("text") or "").split())[:500]
         if client.last_error and not results:
-            return {"ok": False, "error": client.last_error, "query": text, "results": []}
-        return {"ok": True, "query": text, "results": results, "excerpt": excerpt, "error": client.last_error}
+            return {
+                "ok": False,
+                "error": client.last_error,
+                "query": text,
+                "results": [],
+                "backend": client.last_backend,
+            }
+        return {
+            "ok": True,
+            "query": text,
+            "results": results,
+            "excerpt": excerpt,
+            "error": client.last_error,
+            "backend": client.last_backend,
+        }
 
     def save_hearing(self, settings: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(settings, dict):
@@ -785,6 +813,14 @@ class AssistantService:
         game: str,
         image_b64: str,
     ) -> None:
+        await self._emit(
+            {
+                "type": "status",
+                "request_id": request_id,
+                "phase": "screen",
+                "message": "Looking at your screen...",
+            }
+        )
         try:
             raw = await asyncio.to_thread(self._obtain_screen, image_b64)
             jpeg = await asyncio.to_thread(to_jpeg, raw)
@@ -808,15 +844,52 @@ class AssistantService:
             history_override=[{"role": "user", "content": question}],
         )
 
+    def _thinking_tick(self) -> bool:
+        try:
+            return bool(self.hearing.public().get("thinking_tick"))
+        except (OSError, ValueError, AttributeError):
+            return False
+
+    def _tick_loop(self, stop: threading.Event) -> None:
+        from .hearing import play_pcm, tick_pcm
+
+        while not stop.wait(3.0):
+            play_pcm(tick_pcm())
+
     def _obtain_screen(self, image_b64: str) -> bytes:
+        errors: list[str] = []
         if str(image_b64 or "").strip():
-            return decode_supplied_image(image_b64, self.store.runtime_dir)
-        return capture_screen(
-            qam_hidden=True,
-            enabled=True,
-            runtime_dir=self.store.runtime_dir,
-            grabbers=self.screen_grabbers,
-        )
+            try:
+                return decode_supplied_image(image_b64, self.store.runtime_dir)
+            except CaptureError as exc:
+                errors.append(str(exc))
+        try:
+            return capture_screen(
+                qam_hidden=True,
+                enabled=True,
+                runtime_dir=self.store.runtime_dir,
+                grabbers=self.screen_grabbers,
+            )
+        except CaptureError as exc:
+            errors.append(str(exc))
+            raise CaptureError(" ".join(errors)[:500]) from exc
+
+    async def test_screen(self) -> dict[str, Any]:
+        return await asyncio.to_thread(self._test_screen)
+
+    def _test_screen(self) -> dict[str, Any]:
+        try:
+            raw = capture_screen(
+                qam_hidden=True,
+                enabled=True,
+                runtime_dir=self.store.runtime_dir,
+                grabbers=self.screen_grabbers,
+            )
+            jpeg = to_jpeg(raw)
+        except Exception as exc:  # noqa: BLE001 - the settings button shows this
+            return {"ok": False, "error": str(exc)[:500]}
+        self._last_jpeg = jpeg
+        return {"ok": True, "image_b64": base64.b64encode(jpeg).decode("ascii"), "bytes": len(jpeg)}
 
     async def _run_chat(
         self,
@@ -851,6 +924,9 @@ class AssistantService:
             messages = providers.prepare_messages(provider, history, prompt)
             meta["session_id"] = str(current.get("claude_session_id") or "")
             self.host.info("Chat started kind=%s model=%s screen=%s", provider.get("kind"), chosen, bool(image))
+            await self._emit(
+                {"type": "status", "request_id": request_id, "phase": "thinking", "message": "Thinking..."}
+            )
             web_client = WebClient(os.path.join(self.store.runtime_dir, "web-cache"), config.get("web"))
             game_name = str(self._game.get("name") or "")
             question = _user_question(history)
@@ -858,7 +934,7 @@ class AssistantService:
 
             def _produce(queue: asyncio.Queue[tuple[str, object]], loop: asyncio.AbstractEventLoop) -> None:
                 def _status(phase: str) -> None:
-                    asyncio.run_coroutine_threadsafe(queue.put(("web", phase)), loop).result()
+                    asyncio.run_coroutine_threadsafe(queue.put(("status", phase)), loop).result()
 
                 outgoing = messages
                 streamed = False
@@ -880,7 +956,7 @@ class AssistantService:
                         _status("idle")
                         if block:
                             outgoing = _inject_block(outgoing, block)
-                    for delta in providers.iter_text(provider, outgoing, chosen, cancel, meta, image):
+                    for delta in providers.iter_text(provider, outgoing, chosen, cancel, meta, image, _status):
                         if cancel.is_set():
                             break
                         asyncio.run_coroutine_threadsafe(queue.put(("delta", delta)), loop).result()
@@ -891,14 +967,27 @@ class AssistantService:
 
             loop = asyncio.get_running_loop()
             queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+            tick_stop = threading.Event()
+            if self._thinking_tick():
+                threading.Thread(target=self._tick_loop, args=(tick_stop,), name="deckling-tick", daemon=True).start()
             worker = asyncio.create_task(asyncio.to_thread(_produce, queue, loop))
             try:
                 while True:
                     kind, payload = await queue.get()
                     if kind == "end":
                         break
-                    if kind == "web":
-                        await self._emit({"type": "web", "request_id": request_id, "phase": str(payload)})
+                    if kind in {"web", "status"}:
+                        phase = str(payload)
+                        await self._emit(
+                            {
+                                "type": "status",
+                                "request_id": request_id,
+                                "phase": phase,
+                                "message": _status_text(phase),
+                            }
+                        )
+                        if phase == "searching" or phase.startswith("reading"):
+                            await self._emit({"type": "web", "request_id": request_id, "phase": "searching"})
                         continue
                     if kind == "error":
                         raise payload if isinstance(payload, Exception) else RuntimeError(str(payload))
@@ -906,6 +995,7 @@ class AssistantService:
                     collected.append(text)
                     await self._emit({"type": "chat_delta", "request_id": request_id, "text": text})
             finally:
+                tick_stop.set()
                 if not worker.done():
                     await worker
             if cancel.is_set() and not collected:
