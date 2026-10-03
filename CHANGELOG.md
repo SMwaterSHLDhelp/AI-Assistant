@@ -6,6 +6,14 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [Unreleased]
 
+## [0.1.0-rc.12] - 2026-10-03
+
+### Fixed
+
+- The backend starts on Decky Loader 3.2.9. That loader's Python does not include `http.server` (or `socketserver`, `glob`, and `tty`). rc.11 only replaced modules missing from 3.2.6, so importing `http.server` still exited the process before it could answer, and settings kept saying the backend was not responding.
+- If importing the backend still fails, the process stays up. `health` returns the traceback, and it is also written to ~/homebrew/logs/Deckling/boot-error.txt and ~/Deckling-diagnostics.txt.
+- A dead backend is one short line, with the traceback behind Details. The same message is not repeated under Problem or as a toast. Back is a plain row, not a white text field.
+
 ## [0.1.0-rc.11] - 2026-10-03
 
 ### Fixed

@@ -1,14 +1,13 @@
 """Load stdlib modules that Decky's PluginLoader binary does not ship.
 
-Decky Loader v3.2.6 is a PyInstaller executable. Its archive has no ``pty``,
-``wave``, ``html.parser``, ``_markupbase``, or ``urllib.robotparser``. Those
-are imported while ``main.py`` loads, ``sandboxed_plugin.initialize`` catches
-the ``ModuleNotFoundError`` and calls ``sys.exit(0)``, and the method socket
-never opens. Every frontend call then waits until it times out.
-
 The files under ``_frozen`` are the CPython 3.11.17 standard library (PSF
 license, and the robotparser dual notice in that file). They are used only
 when this interpreter does not already provide the module.
+
+v3.2.6 is missing pty, wave, html.parser, and urllib.robotparser. v3.2.9,
+the current stable loader, also dropped http.server, socketserver, glob, and
+tty. http.server is a submodule of the frozen ``http`` package, so a copy on
+``sys.path`` is never found. It has to be registered in ``sys.modules``.
 """
 
 from __future__ import annotations
@@ -21,9 +20,13 @@ from pathlib import Path
 
 _DIR = Path(__file__).resolve().parent / "_frozen"
 
-# _markupbase is imported by html.parser and is also missing from the archive.
+# Order matters: later modules import earlier ones while they load.
 _MODULES: tuple[tuple[str, str], ...] = (
+    ("tty", "tty.py"),
     ("pty", "pty.py"),
+    ("glob", "glob.py"),
+    ("socketserver", "socketserver.py"),
+    ("http.server", "http_server.py"),
     ("wave", "wave.py"),
     ("_markupbase", "_markupbase.py"),
     ("html.parser", "html_parser.py"),

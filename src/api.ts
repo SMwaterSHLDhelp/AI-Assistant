@@ -28,11 +28,9 @@ const CALL_MS = 15000;
 
 // Decky's websocket has no timeout of its own. This fires when the Python
 // process never opened its socket (it exited during import) or never replied.
-export const BACKEND_DOWN =
-  "Backend not responding. Deckling's Python process did not answer, so this screen cannot show the traceback. " +
-  "The plugin log is ~/homebrew/logs/Deckling/ (open the newest file in Desktop Mode). " +
-  "Decky's Developer tab (settings gear, General, enable Developer) shows the CEF console for the UI, not that Python log. " +
-  "The loader log is ~/homebrew/logs/ or journalctl -u plugin_loader.";
+export const BACKEND_DOWN = "Backend not responding.";
+export const BACKEND_DOWN_DETAIL =
+  "Deckling's Python process did not answer. If it wrote a file before exiting, it is ~/homebrew/logs/Deckling/boot-error.txt or ~/Deckling-diagnostics.txt. The loader log is ~/homebrew/logs/ or journalctl -u plugin_loader.";
 
 type BannerHost = { __decklingBanner?: (message: string) => void };
 
@@ -64,7 +62,7 @@ function failedResult(result: unknown): result is OkResult {
   return result !== null && typeof result === "object" && "ok" in result && (result as OkResult).ok === false;
 }
 
-function deckyCall<A extends unknown[], R>(name: string): (...args: A) => Promise<R> {
+function deckyCall<A extends unknown[], R>(name: string, quiet = false): (...args: A) => Promise<R> {
   const fn = callable<A, R>(name);
   return async (...args: A) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -77,13 +75,15 @@ function deckyCall<A extends unknown[], R>(name: string): (...args: A) => Promis
           }, CALL_MS);
         }),
       ]);
-      if (failedResult(result)) {
+      if (!quiet && failedResult(result)) {
         reportCallFailure(result.error || `${name} failed`);
       }
       return result;
     } catch (err) {
       const message = err instanceof Error && err.message ? err.message : `${name} failed`;
-      reportCallFailure(message);
+      if (!quiet) {
+        reportCallFailure(message);
+      }
       return { ok: false, error: message } as R;
     } finally {
       if (timer !== undefined) {
@@ -93,10 +93,10 @@ function deckyCall<A extends unknown[], R>(name: string): (...args: A) => Promis
   };
 }
 
-export const getHealth = deckyCall<[], OkResult & { version?: string }>("health");
+export const getHealth = deckyCall<[], OkResult & { version?: string; traceback?: string }>("health", true);
 export const getDiagnostics = deckyCall<[], OkResult & { version?: string; lines?: string[] }>("diagnostics");
 export const writeDiagnostics = deckyCall<[], OkResult & { path?: string }>("write_diagnostics");
-export const getState = deckyCall<[], AppState & OkResult>("get_state");
+export const getState = deckyCall<[], AppState & OkResult>("get_state", true);
 export const saveProvider = deckyCall<[provider: ProviderInput], OkResult & { provider?: PublicProvider }>(
   "save_provider",
 );

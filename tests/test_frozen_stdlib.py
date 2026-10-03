@@ -26,7 +26,10 @@ def test_missing_loader_modules_still_let_the_plugin_answer(tmp_path: Path) -> N
 import os
 import sys
 
-BANNED = {"pty", "wave", "html.parser", "_markupbase", "urllib.robotparser"}
+BANNED = {
+    "pty", "wave", "html.parser", "_markupbase", "urllib.robotparser",
+    "http.server", "socketserver", "glob", "tty",
+}
 
 class Ban:
     def find_spec(self, fullname, path, target=None):
@@ -105,8 +108,78 @@ print("FROZEN_OK")
 def test_ui_names_a_dead_backend_and_the_log_path() -> None:
     root = Path(__file__).resolve().parents[1]
     api = (root / "src" / "api.ts").read_text(encoding="utf-8")
-    assert "Backend not responding" in api
-    assert "~/homebrew/logs/Deckling/" in api
+    assert 'BACKEND_DOWN = "Backend not responding."' in api
+    assert "~/homebrew/logs/Deckling/boot-error.txt" in api
     assert "journalctl -u plugin_loader" in api
     page = (root / "src" / "settings" / "SettingsPage.tsx").read_text(encoding="utf-8")
     assert "backendUnreachable" in page
+    assert "Hide details" in page
+    assert ".slice(0, 15)" in page
+
+
+def test_an_import_failure_still_answers_health_with_the_traceback(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    home = tmp_path / "home"
+    settings = home / "settings"
+    runtime = home / "runtime"
+    script = r"""
+import os
+import sys
+
+BANNED = {"secrets"}
+
+class Ban:
+    def find_spec(self, fullname, path, target=None):
+        if fullname not in BANNED:
+            return None
+        raise ModuleNotFoundError(f"No module named {fullname!r}")
+
+sys.meta_path.insert(0, Ban())
+
+import logging
+import types
+
+decky = types.ModuleType("decky")
+decky.logger = logging.getLogger("deckling-boot")
+decky.DECKY_PLUGIN_SETTINGS_DIR = os.environ["DECKLING_SETTINGS"]
+decky.DECKY_PLUGIN_RUNTIME_DIR = os.environ["DECKLING_RUNTIME"]
+
+async def emit(event, payload):
+    return None
+
+decky.emit = emit
+sys.modules["decky"] = decky
+
+import asyncio
+import main
+
+plugin = main.Plugin()
+asyncio.run(plugin._migration())
+asyncio.run(plugin._main())
+health = asyncio.run(plugin.health())
+assert health["ok"] is False, health
+assert "secrets" in health["error"]
+assert "Traceback" in health["traceback"]
+assert "secrets" in health["traceback"]
+boot = os.path.join(os.environ["DECKY_PLUGIN_LOG_DIR"], "boot-error.txt")
+text = open(boot, encoding="utf-8").read()
+assert "secrets" in text and "Traceback" in text
+print("BOOT_OK")
+"""
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["DECKY_USER_HOME"] = str(home)
+    env["DECKY_PLUGIN_LOG_DIR"] = str(home / "logs")
+    env["DECKLING_SETTINGS"] = str(settings)
+    env["DECKLING_RUNTIME"] = str(runtime)
+    env["PYTHONPATH"] = os.pathsep.join([str(root), str(root / "py_modules")])
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "BOOT_OK" in result.stdout

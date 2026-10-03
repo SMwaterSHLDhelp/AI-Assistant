@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import {
   deleteProvider,
   getDiagnostics,
+  BACKEND_DOWN_DETAIL,
   getHealth,
   getState,
   saveChats,
@@ -67,6 +68,8 @@ export function SettingsPage() {
   const [pendingDelete, setPendingDelete] = useState("");
   const [healthLine, setHealthLine] = useState("Backend: checking…");
   const [healthOk, setHealthOk] = useState(false);
+  const [healthDetail, setHealthDetail] = useState("");
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   const report = (message: string) => {
@@ -106,13 +109,15 @@ export function SettingsPage() {
           return;
         }
         lastError = loaded.error || lastError;
-        if (backendUnreachable(lastError)) {
-          break;
+        if (backendUnreachable(lastError) || /no module named|traceback/i.test(lastError)) {
+          setLoading(false);
+          return;
         }
       } catch (err) {
         lastError = errorMessage(err, lastError);
-        if (backendUnreachable(lastError)) {
-          break;
+        if (backendUnreachable(lastError) || /no module named|traceback/i.test(lastError)) {
+          setLoading(false);
+          return;
         }
       }
       if (attempt < 2) {
@@ -126,11 +131,25 @@ export function SettingsPage() {
   const refreshHealth = async () => {
     const health = await getHealth();
     if (!health.ok) {
+      const trace = health.traceback || "";
+      const headline = (health.error || "Backend is not connected.").split("\n")[0].slice(0, 160);
       setHealthOk(false);
-      setHealthLine(health.error || "Backend is not connected.");
+      setHealthLine(headline);
+      if (trace.includes("Traceback")) {
+        setHealthDetail(trace);
+        setDetailsOpen(true);
+      } else if (backendUnreachable(headline)) {
+        setHealthDetail(BACKEND_DOWN_DETAIL);
+        setDetailsOpen(false);
+      } else {
+        setHealthDetail(trace && trace !== headline ? trace : "");
+        setDetailsOpen(false);
+      }
       return;
     }
     setHealthOk(true);
+    setHealthDetail("");
+    setDetailsOpen(false);
     setHealthLine(health.version ? `Backend: connected v${health.version}` : "Backend: connected");
   };
 
@@ -179,7 +198,15 @@ export function SettingsPage() {
   };
 
   useEffect(() => {
-    const unsubscribe = subscribeFailures((message) => setError(message));
+    const unsubscribe = subscribeFailures((message) => {
+      if (backendUnreachable(message)) {
+        setHealthOk(false);
+        setHealthLine("Backend not responding.");
+        setHealthDetail(BACKEND_DOWN_DETAIL);
+        return;
+      }
+      setError(message);
+    });
     void refreshHealth();
     void load().then(() => {
       try {
@@ -314,6 +341,31 @@ export function SettingsPage() {
         <PanelSectionRow>
           <div style={{ color: healthOk ? "#3dd68c" : "#f2b8b5", fontSize: "16px" }}>{healthLine}</div>
         </PanelSectionRow>
+        {healthDetail ? (
+          <>
+            <DeckRow layout="below" onClick={() => setDetailsOpen((open) => !open)}>
+              {detailsOpen ? "Hide details" : "Details"}
+            </DeckRow>
+            {detailsOpen ? (
+              <PanelSectionRow>
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    fontSize: "13px",
+                    color: "#f2b8b5",
+                    margin: 0,
+                    fontFamily: "inherit",
+                  }}
+                >
+                  {healthDetail
+                    .split("\n")
+                    .slice(0, 15)
+                    .join("\n")}
+                </pre>
+              </PanelSectionRow>
+            ) : null}
+          </>
+        ) : null}
         <PanelSectionRow>
           <div style={{ fontSize: "15px" }}>A tiny companion for this Deck. B returns to the previous page.</div>
         </PanelSectionRow>

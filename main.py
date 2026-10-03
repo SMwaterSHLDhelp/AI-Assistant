@@ -1,35 +1,107 @@
-import logging
-import os
-import shutil
-import traceback
-
-import decky
-
-from ai_assistant.diagnostics import diagnostics_path, remember, snapshot, write_report
-from ai_assistant.redact import RedactFilter, redact
-from ai_assistant.service import AssistantService
+import sys
 
 # Single event name the Quick Access panel and the settings page both listen for.
 EVENT = "deckling_event"
 LEGACY_NAME = "AI Assistant"
-VERSION = "0.1.0-rc.11"
+VERSION = "0.1.0-rc.12"
+_BOOT_ERROR = ""
+_BOOT_TRACE = ""
+
+
+def _write_boot(text: str) -> None:
+    """Write a startup traceback using only open() and, if it imports, os.
+
+    This runs when every other import has already failed, so it cannot depend
+    on decky, pathlib, or the ai_assistant package.
+    """
+    homes = ["/home/deck"]
+    log_dirs = ["/home/deck/homebrew/logs/Deckling"]
+    try:
+        import os
+
+        home = os.environ.get("DECKY_USER_HOME") or os.environ.get("HOME") or "/home/deck"
+        homes.insert(0, home)
+        log_dir = os.environ.get("DECKY_PLUGIN_LOG_DIR") or (home + "/homebrew/logs/Deckling")
+        log_dirs.insert(0, log_dir)
+    except Exception:
+        os = None  # type: ignore[assignment]
+    payload = text if text.endswith("\n") else text + "\n"
+    header = f"Deckling {VERSION} failed to start\n"
+    paths: list[str] = []
+    for log_dir in log_dirs:
+        paths.append(log_dir + "/boot-error.txt")
+    for home in homes:
+        paths.append(home + "/Deckling-diagnostics.txt")
+    for path in paths:
+        try:
+            folder = path.rsplit("/", 1)[0]
+            if os is not None:
+                os.makedirs(folder, exist_ok=True)
+            handle = open(path, "w", encoding="utf-8")
+            try:
+                handle.write(header)
+                handle.write(payload)
+            finally:
+                handle.close()
+            if os is not None:
+                os.chmod(path, 0o600)
+        except Exception:
+            continue
+
+
+try:
+    import logging
+    import os
+    import shutil
+    import traceback
+
+    import decky
+
+    from ai_assistant.diagnostics import diagnostics_path, remember, snapshot, write_report
+    from ai_assistant.redact import RedactFilter, redact
+    from ai_assistant.service import AssistantService
+except BaseException:
+    _error = sys.exc_info()
+    try:
+        import traceback
+
+        _BOOT_TRACE = "".join(traceback.format_exception(*_error))
+    except Exception:
+        _BOOT_TRACE = f"{getattr(_error[0], '__name__', 'Error')}: {_error[1]}"
+    _BOOT_ERROR = _BOOT_TRACE.strip().splitlines()[-1] if _BOOT_TRACE.strip() else "Deckling failed to start."
+    _write_boot(_BOOT_TRACE or _BOOT_ERROR)
+    logging = None  # type: ignore[assignment]
+    os = None  # type: ignore[assignment]
+    shutil = None  # type: ignore[assignment]
+    traceback = None  # type: ignore[assignment]
+    decky = None  # type: ignore[assignment]
+    diagnostics_path = remember = snapshot = write_report = None  # type: ignore[assignment]
+    RedactFilter = redact = None  # type: ignore[assignment]
+    AssistantService = None  # type: ignore[assignment]
 
 
 class Plugin:
     """Decky entrypoint. Methods are called from the frontend with @decky/api callable()."""
 
-    service: AssistantService
+    service: object
     _boot_error: str = ""
+    _boot_trace: str = ""
 
     async def _migration(self) -> None:
         # Decky runs this before the method socket exists. An exception here
         # makes the loader exit the process, and every later call times out.
+        if _BOOT_ERROR:
+            return
         try:
             migrate_legacy(decky.DECKY_PLUGIN_SETTINGS_DIR, decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger.info)
         except Exception as exc:  # noqa: BLE001 - stay up so health can report this
             self._fail("Deckling could not migrate the previous install.", exc)
 
     async def _main(self) -> None:
+        if _BOOT_ERROR:
+            self._boot_error = _BOOT_ERROR
+            self._boot_trace = _BOOT_TRACE
+            return
         self._boot_error = ""
         decky.logger.addFilter(RedactFilter())
         _install_log_ring()
@@ -51,6 +123,7 @@ class Plugin:
     def _fail(self, summary: str, exc: BaseException) -> None:
         detail = redact(traceback.format_exc())
         self._boot_error = redact(str(exc)) or summary
+        self._boot_trace = detail
         decky.logger.error("%s %s", summary, self._boot_error)
         remember(self._boot_error)
         header = f"Deckling {VERSION} failed to start\n{summary}\n{self._boot_error}"
@@ -59,6 +132,7 @@ class Plugin:
                 write_report(path, [detail], header)
             except Exception:
                 decky.logger.warning("Could not write the startup error to %s", path)
+        _write_boot(detail)
 
     async def _unload(self) -> None:
         decky.logger.info("Deckling unloading")
@@ -78,10 +152,12 @@ class Plugin:
         return self._call("state")
 
     async def health(self) -> dict:
+        trace = self._boot_trace or _BOOT_TRACE
         blocked = self._blocked()
-        if blocked:
-            return {"ok": False, "version": VERSION, "error": blocked["error"]}
-        return {"ok": True, "version": VERSION, "error": ""}
+        if blocked or trace:
+            error = (blocked or {}).get("error") or _BOOT_ERROR or "Deckling failed to start."
+            return {"ok": False, "version": VERSION, "error": error, "traceback": trace}
+        return {"ok": True, "version": VERSION, "error": "", "traceback": ""}
 
     async def diagnostics(self) -> dict:
         return {
@@ -228,9 +304,12 @@ class Plugin:
         return self._call("oauth_status", provider_id)
 
     def _blocked(self) -> dict | None:
+        if _BOOT_ERROR and not self._boot_error:
+            self._boot_error = _BOOT_ERROR
+            self._boot_trace = _BOOT_TRACE
         if self._boot_error:
-            return {"ok": False, "error": self._boot_error}
-        if not hasattr(self, "service"):
+            return {"ok": False, "error": self._boot_error, "traceback": self._boot_trace or _BOOT_TRACE}
+        if not hasattr(self, "service") or self.service is None:
             return {"ok": False, "error": "Deckling is still starting."}
         return None
 
