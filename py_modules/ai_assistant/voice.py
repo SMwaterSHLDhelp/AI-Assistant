@@ -372,9 +372,12 @@ class VoiceEngine:
             shutil.rmtree(venv, ignore_errors=True)
         if not os.path.isfile(python):
             os.makedirs(root, exist_ok=True)
-            from .interpreter import system_python
+            import platform
 
-            completed = self.run([system_python(), "-m", "venv", venv])
+            from .runtime_python import ensure_runtime_python
+
+            base = ensure_runtime_python(self.runtime, self._fetch_voice, machine=self.machine or platform.machine())
+            completed = self.run([base, "-m", "venv", venv])
             if completed.returncode != 0:
                 raise RuntimeError("Could not create a virtual environment for KittenTTS.")
             wheel = os.path.join(root, "kittentts-0.8.1-py3-none-any.whl")
@@ -388,6 +391,10 @@ class VoiceEngine:
         with open(worker, "w", encoding="utf-8") as handle:
             handle.write(_WORKER)
         return python
+
+    def _fetch_voice(self, url: str, dest: str, progress: object = None) -> None:
+        del progress
+        self.fetch(url, dest)
 
     def _kill(self, proc: Any) -> None:
         if self.popen is subprocess.Popen:

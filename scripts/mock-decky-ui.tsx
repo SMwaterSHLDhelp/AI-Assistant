@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 export function ButtonItem({
@@ -147,15 +147,47 @@ export function DialogButton({
 export function SidebarNavigation({
   children,
   pages,
+  title,
 }: {
   children?: ReactNode;
-  pages?: { content?: ReactNode }[];
+  pages?: ({ title?: ReactNode; content?: ReactNode } | "separator")[];
+  title?: ReactNode;
 }) {
+  const real = (pages || []).filter((page): page is { title?: ReactNode; content?: ReactNode } => page !== "separator");
+  const [index, setIndex] = useState(0);
+  const current = Math.min(index, Math.max(real.length - 1, 0));
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) {
+        return;
+      }
+      if (event.key === "ArrowRight" || event.key === "PageDown") {
+        setIndex((value) => Math.min(real.length - 1, value + 1));
+      }
+      if (event.key === "ArrowLeft" || event.key === "PageUp") {
+        setIndex((value) => Math.max(0, value - 1));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [real.length]);
   return (
     <div>
-      {pages?.map((page, index) => (
-        <div key={index}>{page.content}</div>
-      ))}
+      <div role="tablist" aria-label={typeof title === "string" ? title : "Settings"}>
+        {real.map((page, pageIndex) => (
+          <button
+            key={pageIndex}
+            type="button"
+            role="tab"
+            aria-selected={pageIndex === current}
+            onClick={() => setIndex(pageIndex)}
+          >
+            {page.title}
+          </button>
+        ))}
+      </div>
+      <div>{real[current]?.content}</div>
       {children}
     </div>
   );

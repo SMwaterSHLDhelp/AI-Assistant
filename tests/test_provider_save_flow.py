@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ai_assistant import providers
 from ai_assistant.catalog import KINDS
+from ai_assistant.providers import ModelReport
 from ai_assistant.service import AssistantService
 
 
@@ -24,12 +25,13 @@ def test_each_provider_saves_with_an_empty_model_then_lists_models(tmp_path, mon
     service = AssistantService(str(tmp_path / "settings"), str(tmp_path / "runtime"))
     seen: list[str] = []
 
-    def fake_list(record: dict) -> list[str]:
+    def fake_list(record: dict) -> ModelReport:
         assert record.get("default_model", "") == ""
         seen.append(str(record.get("kind")))
-        return [f"{record.get('kind')}-a", f"{record.get('kind')}-b"]
+        kind = str(record.get("kind"))
+        return ModelReport([f"{kind}-a", f"{kind}-b"], [])
 
-    monkeypatch.setattr(providers, "list_models", fake_list)
+    monkeypatch.setattr(providers, "describe_models", fake_list)
     for kind in KINDS:
         saved = service.save_provider(_minimum_payload(kind))
         assert saved["ok"] is True, kind
@@ -57,10 +59,10 @@ def test_model_list_failure_is_logged_and_does_not_drop_the_provider(tmp_path, m
 
     service = AssistantService(str(tmp_path / "settings"), str(tmp_path / "runtime"), Host())
 
-    def explode(_record: dict) -> list[str]:
+    def explode(_record: dict) -> ModelReport:
         raise ValueError("connection refused")
 
-    monkeypatch.setattr(providers, "list_models", explode)
+    monkeypatch.setattr(providers, "describe_models", explode)
     saved = service.save_provider(_minimum_payload("ollama"))
     listed = asyncio.run(service.list_models(saved["provider"]["id"]))
     assert saved["ok"] is True
@@ -80,7 +82,11 @@ def test_settings_rows_activate_from_the_gamepad_and_from_touch() -> None:
     assert "Focusable" not in page
     assert "onActivate" in row
     assert "onOKButton" in row
-    assert "SidebarNavigation" in route
+    assert "SidebarNavigation" in page
+    assert 'title: "Voice"' in page
+    assert 'title: "Spoken replies"' in page
+    assert 'title: "Privacy and Web"' in page
+    assert 'title: "Advanced"' in page
     assert "mountPageShell" not in route
     assert "SettingsRoute" in index
     assert "SettingsDialog" in editor

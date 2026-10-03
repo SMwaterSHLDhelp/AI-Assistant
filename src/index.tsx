@@ -6,11 +6,15 @@ import { SettingsRoute } from "./settings/SettingsRoute";
 
 export default definePlugin(() => {
   routerHook.addRoute("/deckling/settings", SettingsRoute, { exact: true });
+  const content = <ChatPanel />;
+  if (typeof window !== "undefined") {
+    (window as unknown as { __decklingQAM?: typeof content }).__decklingQAM = content;
+  }
 
   return {
     name: "Deckling",
     titleView: <div className={staticClasses.Title}>Deckling</div>,
-    content: <ChatPanel />,
+    content,
     icon: <FaRobot />,
     onDismount() {
       routerHook.removeRoute("/deckling/settings");

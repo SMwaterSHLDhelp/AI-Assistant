@@ -22,7 +22,7 @@ from .oauth import OAuthError
 from .redact import redact
 from .screen import capture_screen, decode_supplied_image
 from .store import Store, normalize_voice, public_provider, public_session_summary
-from .vision import DEFAULT_QUESTION, jarvis_prompt, model_sees_images, vision_ids
+from .vision import DEFAULT_QUESTION, jarvis_prompt, model_can_see, vision_ids
 from .voice import VoiceEngine
 from .web import WebClient, public_web
 from .web_chat import TOOL_KINDS, ToolsUnsupported, iter_with_tools
@@ -271,7 +271,9 @@ class AssistantService:
         provider = await self._provider_ready(provider_id)
         started = time.perf_counter()
         try:
-            models = await asyncio.to_thread(providers.list_models, provider)
+            report = await asyncio.to_thread(providers.describe_models, provider)
+            models = report.ids
+            seen = set(report.vision)
         except (HttpError, ValueError, OSError, ClaudeCodeError) as exc:
             self.host.warning("Connection test failed kind=%s", provider.get("kind"))
             elapsed = _elapsed_ms(started)
@@ -296,7 +298,7 @@ class AssistantService:
             "ok": True,
             "message": message,
             "models": preview,
-            "vision_models": vision_ids(preview),
+            "vision_models": vision_ids(preview, provider, seen),
             "status": 200,
             "latency_ms": elapsed,
         }
@@ -304,7 +306,9 @@ class AssistantService:
     async def list_models(self, provider_id: str) -> dict[str, Any]:
         provider = await self._provider_ready(provider_id)
         try:
-            models = await asyncio.to_thread(providers.list_models, provider)
+            report = await asyncio.to_thread(providers.describe_models, provider)
+            models = report.ids
+            seen = set(report.vision)
         except (HttpError, ValueError, OSError, ClaudeCodeError) as exc:
             message = redact(_public_error(exc))
             self.host.warning("Model list failed kind=%s: %s", provider.get("kind"), message)
@@ -313,7 +317,7 @@ class AssistantService:
         shown = models[:80]
         detail = f"Connected. {len(models)} model{'s' if len(models) != 1 else ''} available."
         self.store.set_connection(provider_id, "connected", detail)
-        return {"ok": True, "models": shown, "vision_models": vision_ids(shown)}
+        return {"ok": True, "models": shown, "vision_models": vision_ids(shown, provider, seen)}
 
     def start_chat(
         self,
@@ -562,7 +566,7 @@ class AssistantService:
             return _fail("Hide the Quick Access Menu before taking the shot.")
         provider = self.store.get_provider(provider_id)
         chosen = str(model or "").strip() or str(provider.get("default_model") or "")
-        if provider.get("kind") == "claude_code" or not model_sees_images(chosen):
+        if provider.get("kind") == "claude_code" or not self._model_can_see(provider, chosen):
             return self._text_only(provider, chosen)
         question_text = " ".join(str(question or "").split())[:2000] or DEFAULT_QUESTION
         game_name = _about_game(game)
@@ -585,10 +589,26 @@ class AssistantService:
         task.add_done_callback(self._tasks.discard)
         return {"ok": True, "request_id": request_id}
 
+    def _model_can_see(self, provider: dict[str, Any], chosen: str) -> bool:
+        overrides = provider.get("vision_override") if isinstance(provider.get("vision_override"), dict) else {}
+        if chosen in overrides:
+            return bool(overrides[chosen])
+        auto: set[str] = set()
+        try:
+            auto = set(providers.describe_models(provider).vision)
+        except (HttpError, ValueError, OSError, ClaudeCodeError):
+            auto = set()
+        return model_can_see(provider, chosen, auto)
+
+    def set_model_vision(self, provider_id: str, model: str, enabled: bool) -> dict[str, Any]:
+        record = self.store.set_model_vision(provider_id, model, enabled)
+        return {"ok": True, "provider": public_provider(record)}
+
     def _text_only(self, provider: dict[str, Any], chosen: str) -> dict[str, Any]:
         suggestions: list[str] = []
         try:
-            suggestions = vision_ids(providers.list_models(provider))[:8]
+            report = providers.describe_models(provider)
+            suggestions = vision_ids(report.ids, provider, set(report.vision))[:8]
         except (HttpError, ValueError, OSError, ClaudeCodeError):
             suggestions = []
         if provider.get("kind") == "claude_code":

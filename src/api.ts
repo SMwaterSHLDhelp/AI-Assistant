@@ -122,6 +122,10 @@ export const testProvider = deckyCall<
 export const listModels = deckyCall<[providerId: string], OkResult & { models?: string[]; vision_models?: string[] }>(
   "list_models",
 );
+export const setModelVision = deckyCall<
+  [providerId: string, model: string, enabled: boolean],
+  OkResult & { provider?: PublicProvider }
+>("set_model_vision");
 export const sendMessage = deckyCall<
   [providerId: string, model: string, content: string, requestId: string, aboutGame: string],
   OkResult & { messages?: AppState["messages"]; sessions?: SessionSummary[] }

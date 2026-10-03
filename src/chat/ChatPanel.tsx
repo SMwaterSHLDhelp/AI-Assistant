@@ -1,7 +1,6 @@
 import { addEventListener, removeEventListener, toaster } from "@decky/api";
 import {
   ButtonItem,
-  ConfirmModal,
   ModalRoot,
   Navigation,
   PanelSection,
@@ -12,13 +11,10 @@ import {
 import { useEffect, useRef, useState } from "react";
 import {
   cancelChat,
-  clearSession,
   getState,
   listModels,
   lookAtScreen,
-  newSession,
   pushToTalk,
-  saveLastScreenshot,
   sendMessage,
   setGameContext,
   setHearingActivity,
@@ -28,15 +24,15 @@ import {
 import { fieldValue } from "../form";
 import { nextStep } from "../hints";
 import { renderMarkdown } from "../markdown";
-import { FirstRun, PRESET_KEY } from "../onboarding";
+import { PRESET_KEY } from "../onboarding";
 import { bindHearingChord, bindSleep } from "../hearing";
 import { ModelPicker } from "../ModelPicker";
 import { errorMessage, sleep, withRetry } from "../retry";
 import { bindScreenChord, prepareScreenCapture, trySteamScreenshot, wantsScreenLook } from "../screenHelp";
-import { copyText, newRequestId, runningGameName } from "../steam";
+import { newRequestId, runningGameName } from "../steam";
 import type { AppState, BackendEvent, ChatMessage } from "../types";
 import { defaultChats, defaultContext, defaultHearing, defaultVoice, defaultWeb } from "../types";
-import { ChatList, type SessionResult } from "./ChatList";
+import type { SessionResult } from "./ChatList";
 import type { NowPlaying } from "../types";
 import { readLiveGame } from "../gameContext";
 
@@ -66,7 +62,6 @@ export function ChatPanel() {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
   const [streaming, setStreaming] = useState(false);
-  const [game, setGame] = useState("");
   const [loading, setLoading] = useState(true);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
@@ -213,6 +208,10 @@ export function ChatPanel() {
           if (loaded.ok) {
             setState({
               ...loaded,
+              catalog: loaded.catalog || [],
+              providers: loaded.providers || [],
+              messages: loaded.messages || [],
+              sessions: loaded.sessions || [],
               voice: { ...defaultVoice(), ...(loaded.voice || {}) },
               hearing: { ...defaultHearing(), ...(loaded.hearing || {}) },
               context: { ...defaultContext(), ...(loaded.context || {}) },
@@ -279,12 +278,6 @@ export function ChatPanel() {
       offSleep();
       window.clearInterval(timer);
     };
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setGame(runningGameName()), 2000);
-    setGame(runningGameName());
-    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -593,22 +586,6 @@ export function ChatPanel() {
     }
   };
 
-  const openChats = () => {
-    const handle = { close: () => undefined as void };
-    const opened = showModal(
-      <ChatList
-        sessions={state.sessions}
-        currentId={state.current_session_id}
-        activeKey={state.game?.game_key || "general"}
-        activeLabel={state.game?.game_label || state.game?.name || "General"}
-        onApply={applyOpened}
-        onClose={() => handle.close()}
-      />,
-      window,
-    );
-    handle.close = () => opened.Close();
-  };
-
   return (
     <>
       <style>{`
@@ -618,26 +595,21 @@ export function ChatPanel() {
         .deckling-bubble code { font-size: 14px; }
       `}</style>
       <PanelSection title="Deckling">
-        {state.game ? <NowPlayingCard game={state.game} /> : null}
-        <PanelSectionRow>
-          <div style={{ fontSize: "14px", opacity: 0.85 }}>A tiny companion in your menu.</div>
-        </PanelSectionRow>
         {loading ? (
           <PanelSectionRow>
             <div>Loading…</div>
           </PanelSectionRow>
         ) : null}
         {state.providers.length === 0 && !loading ? (
-          <FirstRun onPreset={(kind) => openSettings(kind)} onCustom={() => openSettings()} />
+          <ButtonItem layout="below" onClick={() => openSettings()}>
+            Add a provider in Settings
+          </ButtonItem>
         ) : null}
         {state.providers.length > 0 ? (
           <ButtonItem layout="below" onClick={openSwitcher}>
             {`${currentProvider?.name || "Provider"} · ${model || "choose a model"}`}
           </ButtonItem>
         ) : null}
-        <ButtonItem layout="below" onClick={openChats}>
-          {state.sessions.find((item) => item.id === state.current_session_id)?.title || "Chats"}
-        </ButtonItem>
       </PanelSection>
 
       <PanelSection title="Chat">
@@ -676,17 +648,6 @@ export function ChatPanel() {
         <ButtonItem layout="below" onClick={() => void look(draft || "What am I looking at, and what should I do next?")}>
           Look at my screen
         </ButtonItem>
-        <ButtonItem layout="below" onClick={() => void refreshSession(setState, setError, "new")}>
-          New chat
-        </ButtonItem>
-        <ButtonItem layout="below" disabled={!providerId || streaming} onClick={() => void send("", "Summarize this conversation in a few sentences.")}>
-          Summarize
-        </ButtonItem>
-        {state.suggestions.map((prompt) => (
-          <ButtonItem key={prompt} layout="below" disabled={!providerId || streaming} onClick={() => void send("", prompt)}>
-            {prompt}
-          </ButtonItem>
-        ))}
       </PanelSection>
 
       <PanelSection title="Message">
@@ -710,9 +671,6 @@ export function ChatPanel() {
             Send
           </ButtonItem>
         )}
-        <ButtonItem layout="below" disabled={streaming || !game} description={game ? `Playing ${game}` : "No game is running"} onClick={() => void send(game)}>
-          Ask about the current game
-        </ButtonItem>
         <ButtonItem
           layout="below"
           disabled={streaming}
@@ -745,80 +703,10 @@ export function ChatPanel() {
           </ButtonItem>
         ) : null}
         <ButtonItem layout="below" onClick={() => openSettings()}>
-          Provider settings
-        </ButtonItem>
-        <ButtonItem
-          layout="below"
-          onClick={() => {
-            void (async () => {
-              const saved = await saveLastScreenshot();
-              if (!saved.ok) {
-                setError(saved.error || "Nothing to save yet. Look at the screen first.");
-                return;
-              }
-              setError("");
-              toaster.toast({ title: "Deckling", body: "Saved the screenshot on this Deck.", duration: 2000 });
-            })();
-          }}
-        >
-          Save screenshot
-        </ButtonItem>
-        <ButtonItem
-          layout="below"
-          disabled={!lastAssistant(state.messages)}
-          onClick={() => {
-            const text = lastAssistant(state.messages);
-            if (text) {
-              void copyText(text);
-            }
-          }}
-        >
-          Copy last reply
-        </ButtonItem>
-        <ButtonItem
-          layout="below"
-          onClick={() =>
-            showModal(
-              <ConfirmModal
-                strTitle="Clear this chat?"
-                strDescription="Messages in this conversation will be deleted on this Deck."
-                strOKButtonText="Clear"
-                onOK={() => void refreshSession(setState, setError, "clear")}
-              />,
-            )
-          }
-        >
-          Clear chat
+          Settings
         </ButtonItem>
       </PanelSection>
     </>
-  );
-}
-
-function NowPlayingCard({ game }: { game: NowPlaying }) {
-  const progress =
-    game.achievements_total && game.achievements_unlocked != null
-      ? `Achievements ${game.achievements_unlocked}/${game.achievements_total}`
-      : "";
-  return (
-    <PanelSectionRow>
-      <div style={{ display: "flex", gap: "10px", alignItems: "center", padding: "4px 0 8px" }}>
-        {game.capsule ? (
-          <img src={game.capsule} alt="" width={92} height={43} style={{ borderRadius: "4px", objectFit: "cover" }} />
-        ) : (
-          <div
-            aria-hidden
-            style={{ width: "44px", height: "44px", borderRadius: "8px", background: "#1b3a4a", flex: "0 0 auto" }}
-          />
-        )}
-        <div>
-          <div style={{ fontSize: "12px", letterSpacing: "0.04em", opacity: 0.7 }}>Now playing</div>
-          <div style={{ fontSize: "16px" }}>{game.name}</div>
-          {game.rich_presence ? <div style={{ fontSize: "14px" }}>{game.rich_presence}</div> : null}
-          {progress ? <div style={{ fontSize: "14px" }}>{progress}</div> : null}
-        </div>
-      </div>
-    </PanelSectionRow>
   );
 }
 
@@ -881,31 +769,4 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       </div>
     </PanelSectionRow>
   );
-}
-
-function lastAssistant(messages: ChatMessage[]): string {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === "assistant" && messages[index].content) {
-      return messages[index].content;
-    }
-  }
-  return "";
-}
-
-async function refreshSession(
-  setState: (updater: (prev: AppState) => AppState) => void,
-  setError: (value: string) => void,
-  action: "new" | "clear",
-) {
-  const result = action === "new" ? await newSession() : await clearSession();
-  if (!result.ok || !result.messages) {
-    setError(result.error || "Could not update the conversation");
-    return;
-  }
-  setState((prev) => ({
-    ...prev,
-    current_session_id: result.current_session_id || prev.current_session_id,
-    messages: result.messages || [],
-    sessions: result.sessions ?? prev.sessions,
-  }));
 }

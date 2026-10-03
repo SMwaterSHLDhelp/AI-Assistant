@@ -51,6 +51,9 @@ def wants_screen_look(text: str) -> bool:
     return any(phrase in cleaned for phrase in SCREEN_PHRASES)
 
 
+_VISION_CAPS = {"multimodal", "vision", "image"}
+
+
 def model_sees_images(model_id: str) -> bool:
     lower = str(model_id or "").lower()
     if not lower or any(word in lower for word in _NOT_VISION):
@@ -60,8 +63,50 @@ def model_sees_images(model_id: str) -> bool:
     return "sonnet" in lower or "opus" in lower
 
 
-def vision_ids(models: list[str]) -> list[str]:
-    return [model for model in models if model_sees_images(model)]
+def capabilities_see_images(capabilities: Any) -> bool:
+    if not isinstance(capabilities, list):
+        return False
+    return any(str(item).strip().lower() in _VISION_CAPS for item in capabilities)
+
+
+def row_sees_images(row: dict[str, Any], props_vision: bool | None = None) -> bool:
+    """True when a model record, llama.cpp /props, or the model name says it takes images."""
+    if capabilities_see_images(row.get("capabilities")):
+        return True
+    modalities = row.get("modalities")
+    if isinstance(modalities, dict) and modalities.get("vision") is True:
+        return True
+    name = str(row.get("id") or row.get("name") or row.get("model") or "")
+    if model_sees_images(name):
+        return True
+    return props_vision is True
+
+
+def vision_override_map(provider: dict[str, Any] | None) -> dict[str, bool]:
+    raw = (provider or {}).get("vision_override")
+    if not isinstance(raw, dict):
+        return {}
+    found: dict[str, bool] = {}
+    for key, value in raw.items():
+        model = str(key or "").strip()
+        if model:
+            found[model[:200]] = bool(value)
+    return found
+
+
+def model_can_see(provider: dict[str, Any] | None, model_id: str, auto: set[str] | None = None) -> bool:
+    """A saved per-model switch wins over detection."""
+    model = str(model_id or "").strip()
+    overrides = vision_override_map(provider)
+    if model in overrides:
+        return overrides[model]
+    if auto is not None and model in auto:
+        return True
+    return model_sees_images(model)
+
+
+def vision_ids(models: list[str], provider: dict[str, Any] | None = None, auto: set[str] | None = None) -> list[str]:
+    return [model for model in models if model_can_see(provider, model, auto)]
 
 
 def jarvis_prompt(game: str) -> str:

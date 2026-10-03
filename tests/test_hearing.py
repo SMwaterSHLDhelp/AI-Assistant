@@ -40,6 +40,7 @@ def _pcm(ms: int, amplitude: int) -> bytes:
 
 def _engine(tmp_path, **kwargs) -> HearingEngine:
     store = Store(str(tmp_path / "settings"), str(tmp_path / "runtime"))
+    kwargs.setdefault("python", sys.executable)
     engine = HearingEngine(store, **kwargs)
     engine.autostart = False
     return engine
@@ -258,8 +259,8 @@ def test_unknown_whisper_architecture_is_rejected(tmp_path) -> None:
         raise RuntimeError("wheel failed")
 
     engine = _engine(tmp_path, fetch=fetch, run=run, machine="mips")
-    with pytest.raises(RuntimeError, match="no Linux build"):
-        engine.install()
+    engine.install()
+    assert "no Linux build" in engine.public()["install_message"]
 
 
 def test_debug_audio_is_kept_at_mode_0600_and_otherwise_deleted(tmp_path) -> None:

@@ -1,5 +1,6 @@
 import { PanelSection, PanelSectionRow } from "@decky/ui";
-import { saveHearing } from "../api";
+import { useEffect, useState } from "react";
+import { getState, saveHearing } from "../api";
 import { DeckRow } from "../DeckRow";
 import { errorMessage } from "../retry";
 import type { HearingSettings } from "../types";
@@ -27,14 +28,28 @@ export function HearingSection({
   };
 
   const percent = Math.round(hearing.sensitivity * 100);
+  const [about, setAbout] = useState(false);
+  const progress = Math.round((hearing.install_progress || 0) * 100);
+  const installing = Boolean(hearing.install_message) && progress > 0 && progress < 100;
+
+  useEffect(() => {
+    if (!hearing.wake_enabled || !installing) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      void getState().then((loaded) => {
+        if (loaded.hearing) {
+          onHearing({ ...hearing, ...loaded.hearing });
+        }
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [hearing.install_message, hearing.wake_enabled, installing, onHearing]);
 
   return (
     <PanelSection title="Voice">
       <PanelSectionRow>
-        <div>
-          Wake word and speech recognition run on this Deck. Audio is not saved unless debug capture is on. Models
-          download into the plugin data folder the first time you turn listening on.
-        </div>
+        <div>Models download onto this Deck the first time listening is on.</div>
       </PanelSectionRow>
       <DeckRow layout="below" onClick={() => void save({ wake_enabled: !hearing.wake_enabled })}>
         {hearing.wake_enabled ? "Wake word: on" : "Wake word: off"}
@@ -78,7 +93,10 @@ export function HearingSection({
       </DeckRow>
       {hearing.install_message ? (
         <PanelSectionRow>
-          <div>{hearing.install_message}</div>
+          <div>
+            {hearing.install_message}
+            {installing ? ` ${progress}%` : ""}
+          </div>
         </PanelSectionRow>
       ) : null}
       {hearing.wake_error ? (
@@ -86,12 +104,14 @@ export function HearingSection({
           <div style={{ color: "#f2b8b5", whiteSpace: "pre-wrap" }}>{hearing.wake_error}</div>
         </PanelSectionRow>
       ) : null}
-      <PanelSectionRow>
-        <div>
-          A custom “hey deckling” model is not bundled. hey jarvis is the default once the wake word is on.{" "}
-          {hearing.idle_note}
-        </div>
-      </PanelSectionRow>
+      <DeckRow layout="below" onClick={() => setAbout((open) => !open)}>
+        {about ? "Hide wake word notes" : "Wake word notes"}
+      </DeckRow>
+      {about ? (
+        <PanelSectionRow>
+          <div>A custom “hey deckling” model is not bundled. hey jarvis is the built-in word. {hearing.idle_note}</div>
+        </PanelSectionRow>
+      ) : null}
     </PanelSection>
   );
 }

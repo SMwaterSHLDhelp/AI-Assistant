@@ -85,6 +85,7 @@ def test_screen_phrases_and_vision_models() -> None:
     assert not model_sees_images("tts-1")
     assert not model_sees_images("gemini-embedding-001")
     assert not model_sees_images("llama3:latest")
+    assert not model_sees_images("qwen3.8-flash-next")
     assert "Hades" in jarvis_prompt("Hades")
     assert "no game detected" in jarvis_prompt("")
 
@@ -312,6 +313,11 @@ def test_kitten_install_failure_falls_back_to_piper(tmp_path, monkeypatch) -> No
 
     def run(_args):
         raise RuntimeError("python -m venv is not available")
+
+    monkeypatch.setattr(
+        "ai_assistant.runtime_python.ensure_runtime_python",
+        lambda *_args, **_kwargs: "/usr/bin/python3",
+    )
 
     def fetch(url: str, dest: str) -> None:
         Path(dest).parent.mkdir(parents=True, exist_ok=True)

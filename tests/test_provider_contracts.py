@@ -226,7 +226,8 @@ def test_llamacpp_adds_v1_and_reads_reasoning_content() -> None:
     assert models == ["qwen-test"]
     assert text == "hello"
     assert calls[0]["path"] == "/v1/models"
-    posted = _json_body(calls[1])
+    assert any(call["path"] == "/props" for call in calls)
+    posted = _json_body(next(call for call in calls if call["path"] == "/v1/chat/completions"))
     assert posted["max_tokens"] == 64
     assert "max_completion_tokens" not in posted
     assert posted["model"] == "chosen-model"

@@ -6,6 +6,14 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [Unreleased]
 
+## [0.1.0-rc.14] - 2026-10-03
+
+### Fixed
+
+- Wake word install no longer uses SteamOS Python. `/usr/bin/python3` has no pip, and the root filesystem is read-only, which produced "No module named pip". The first time listening is turned on, Deckling downloads python-build-standalone 3.11 (x86_64 or aarch64), checks its SHA-256, and installs openWakeWord and the speech wheels into a virtualenv under the plugin data folder. Install progress is saved, and a whisper.cpp failure is shown instead of leaving "Installing whisper.cpp" on screen.
+- llama.cpp models that can see images are recognized. Detection reads `capabilities` containing `multimodal` or `vision`, llama.cpp `/props` `modalities.vision`, and the model name. A "This model can see images" switch on the provider always wins.
+- The Quick Access menu is the chat: messages, the ask field, the microphone, Look at my screen, the model switcher, and Settings. Everything else is a full-screen page with Steam's SidebarNavigation. Tabs are Providers, Voice, Spoken replies, Screen help, Privacy and Web, Chats, and Advanced. Shoulder buttons or the D-pad move between tabs, and B goes back. Each tab is short, with longer notes behind a row.
+
 ## [0.1.0-rc.13] - 2026-10-03
 
 ### Fixed

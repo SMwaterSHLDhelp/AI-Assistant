@@ -190,6 +190,33 @@ try {
   await page.waitForFunction(() => document.body.innerText.includes("Backend: connected v0.1.0-rc.10"), {
     timeout: 8000,
   });
+  const qam = await page.evaluate(() => document.querySelector("#qam")?.innerText || "");
+  if (!qam.includes("Look at my screen") || !qam.includes("Settings") || !qam.includes("Ask")) {
+    throw new Error(`Quick Access menu is missing the chat controls:\n${qam}`);
+  }
+  if (/Wake word|Spoken replies|Use Piper|Share game context/.test(qam)) {
+    throw new Error(`Quick Access menu still contains settings:\n${qam}`);
+  }
+  const tabs = await page.evaluate(() =>
+    [...document.querySelectorAll("[role='tab']")].map((item) => item.textContent || ""),
+  );
+  for (const title of ["Providers", "Voice", "Spoken replies", "Screen help", "Privacy and Web", "Chats", "Advanced"]) {
+    if (!tabs.includes(title)) {
+      throw new Error(`Missing settings tab ${title}: ${tabs.join(", ")}`);
+    }
+  }
+  if ((await textOf(page)).includes("Wake word")) {
+    throw new Error("Voice settings were visible on the Providers tab");
+  }
+  await page.keyboard.press("ArrowRight");
+  await page.waitForFunction(() => document.querySelector("[role='tab'][aria-selected='true']")?.textContent === "Voice", {
+    timeout: 4000,
+  });
+  await page.keyboard.press("ArrowLeft");
+  await page.waitForFunction(
+    () => document.querySelector("[role='tab'][aria-selected='true']")?.textContent === "Providers",
+    { timeout: 4000 },
+  );
   await page.waitForFunction(() => document.body.innerText.includes("llama.cpp on my PC"), { timeout: 4000 });
 
   await activateRow(page, "llama.cpp on my PC");
@@ -221,6 +248,8 @@ try {
   }
   await clickButton(page, "Cancel");
 
+  await clickButton(page, "Voice");
+  await page.waitForFunction(() => document.body.innerText.includes("Wake word: off"), { timeout: 4000 });
   const wakeOptionsVisible = await page.evaluate(
     () => Boolean(document.querySelector("input[aria-label='Wake word sensitivity']")),
   );
@@ -246,6 +275,8 @@ try {
     throw new Error("Sensitivity stayed on screen after wake word was turned off");
   }
 
+  await clickButton(page, "Spoken replies");
+  await page.waitForFunction(() => document.body.innerText.includes("Use Piper"), { timeout: 4000 });
   if ((await textOf(page)).includes("en_US-lessac-medium")) {
     throw new Error("Piper voices were shown before an engine was picked");
   }

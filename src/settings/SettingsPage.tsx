@@ -1,5 +1,5 @@
-import { Navigation, PanelSection, PanelSectionRow, TextField, showModal } from "@decky/ui";
-import { useEffect, useState } from "react";
+import { Navigation, PanelSection, PanelSectionRow, SidebarNavigation, TextField, showModal } from "@decky/ui";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   deleteProvider,
   getDiagnostics,
@@ -59,7 +59,7 @@ const emptyState = (): AppState => ({
   chats: defaultChats(),
 });
 
-export function SettingsPage() {
+export function SettingsPage({ layout = "stack" }: { layout?: "stack" | "tabs" }) {
   const [state, setState] = useState<AppState>(emptyState);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -71,6 +71,7 @@ export function SettingsPage() {
   const [healthDetail, setHealthDetail] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
 
   const report = (message: string) => {
     setError(message);
@@ -335,50 +336,12 @@ export function SettingsPage() {
     }
   };
 
-  return (
-    <div style={{ padding: "8px 16px 24px", width: "100%", boxSizing: "border-box" }}>
-      <PanelSection title="Deckling">
-        <PanelSectionRow>
-          <div style={{ color: healthOk ? "#3dd68c" : "#f2b8b5", fontSize: "16px" }}>{healthLine}</div>
-        </PanelSectionRow>
-        {healthDetail ? (
-          <>
-            <DeckRow layout="below" onClick={() => setDetailsOpen((open) => !open)}>
-              {detailsOpen ? "Hide details" : "Details"}
-            </DeckRow>
-            {detailsOpen ? (
-              <PanelSectionRow>
-                <pre
-                  style={{
-                    whiteSpace: "pre-wrap",
-                    fontSize: "13px",
-                    color: "#f2b8b5",
-                    margin: 0,
-                    fontFamily: "inherit",
-                  }}
-                >
-                  {healthDetail
-                    .split("\n")
-                    .slice(0, 15)
-                    .join("\n")}
-                </pre>
-              </PanelSectionRow>
-            ) : null}
-          </>
-        ) : null}
-        <PanelSectionRow>
-          <div style={{ fontSize: "15px" }}>A tiny companion for this Deck. B returns to the previous page.</div>
-        </PanelSectionRow>
-        {loading ? (
-          <PanelSectionRow>
-            <div>Loading settings…</div>
-          </PanelSectionRow>
-        ) : null}
-        <DeckRow layout="below" onClick={() => Navigation.NavigateBack()}>
-          Back
-        </DeckRow>
-      </PanelSection>
+  const shell = (nodes: ReactNode) => (
+    <div style={{ padding: "8px 16px 24px", width: "100%", boxSizing: "border-box" }}>{nodes}</div>
+  );
 
+  const status = (
+    <>
       {error ? (
         <PanelSection title="Problem">
           <PanelSectionRow>
@@ -393,25 +356,43 @@ export function SettingsPage() {
           </PanelSectionRow>
         </PanelSection>
       ) : null}
+    </>
+  );
 
+  const providersPage = shell(
+    <>
+      <PanelSection title="Deckling">
+        <PanelSectionRow>
+          <div style={{ color: healthOk ? "#3dd68c" : "#f2b8b5", fontSize: "16px" }}>{healthLine}</div>
+        </PanelSectionRow>
+        {healthDetail ? (
+          <DeckRow layout="below" onClick={() => setDetailsOpen((open) => !open)}>
+            {detailsOpen ? "Hide details" : "Details"}
+          </DeckRow>
+        ) : null}
+        {detailsOpen && healthDetail ? (
+          <PanelSectionRow>
+            <pre style={{ whiteSpace: "pre-wrap", fontSize: "13px", color: "#f2b8b5", margin: 0, fontFamily: "inherit" }}>
+              {healthDetail.split("\n").slice(0, 15).join("\n")}
+            </pre>
+          </PanelSectionRow>
+        ) : null}
+        {loading ? (
+          <PanelSectionRow>
+            <div>Loading settings…</div>
+          </PanelSectionRow>
+        ) : null}
+        <DeckRow layout="below" onClick={() => Navigation.NavigateBack()}>
+          Back
+        </DeckRow>
+      </PanelSection>
+      {status}
       {state.providers.length === 0 ? <FirstRun onPreset={openPreset} onCustom={() => openEditor()} /> : null}
       {voiceOffer ? (
-        <PanelSection title="Voice setup">
-          <PanelSectionRow>
-            <div>Optional. Deckling can listen for “hey jarvis”. The model downloads onto this Deck the first time you turn it on.</div>
-          </PanelSectionRow>
-          <DeckRow
-            layout="below"
-            onClick={() => {
-              setVoiceOffer(false);
-              document.getElementById("deckling-voice")?.scrollIntoView();
-            }}
-          >
-            Set up voice later
-          </DeckRow>
-        </PanelSection>
+        <PanelSectionRow>
+          <div>Wake word is under Voice. It downloads the first time you turn it on.</div>
+        </PanelSectionRow>
       ) : null}
-
       <PanelSection title="Providers">
         {state.providers.map((provider) => (
           <ProviderCard
@@ -431,119 +412,186 @@ export function SettingsPage() {
           </DeckRow>
         ) : null}
       </PanelSection>
+    </>,
+  );
 
-      <div id="deckling-voice">
-        <HearingSection
-          hearing={state.hearing}
-          onHearing={(hearing) => setState((prev) => ({ ...prev, hearing }))}
-          onError={report}
-        />
-      </div>
-
-      <VoiceSection
-        voice={state.voice}
-        onVoice={(voice) => setState((prev) => ({ ...prev, voice }))}
+  const voicePage = shell(
+    <div id="deckling-voice">
+      <HearingSection
+        hearing={state.hearing}
+        onHearing={(hearing) => setState((prev) => ({ ...prev, hearing }))}
         onError={report}
-        onNotice={(message) => {
-          setError("");
-          setNotice(message);
-        }}
       />
+    </div>,
+  );
 
-      <PanelSection title="Screen help">
-        <PanelSectionRow>
-          <div>Screenshots go only to the provider you picked, and only when you ask about the screen. They are not saved unless you press Save screenshot.</div>
-        </PanelSectionRow>
-        <DeckRow layout="below" onClick={() => void setScreen(!state.voice.screen_capture)}>
-          {state.voice.screen_capture ? "Screen capture: on" : "Screen capture: off"}
-        </DeckRow>
-      </PanelSection>
+  const spokenPage = shell(
+    <>
+    {notice ? (
+      <PanelSectionRow>
+        <div>{notice}</div>
+      </PanelSectionRow>
+    ) : null}
+    {error ? (
+      <PanelSectionRow>
+        <div style={{ color: "#f2b8b5", whiteSpace: "pre-wrap" }}>{error}</div>
+      </PanelSectionRow>
+    ) : null}
+    <VoiceSection
+      voice={state.voice}
+      onVoice={(voice) => setState((prev) => ({ ...prev, voice }))}
+      onError={report}
+      onNotice={(message) => {
+        setError("");
+        setNotice(message);
+      }}
+    />
+    </>,
+  );
 
-      <PanelSection title="Privacy">
+  const screenPage = shell(
+    <PanelSection title="Screen help">
+      <PanelSectionRow>
+        <div>A screenshot is sent only when you ask, and it is not saved.</div>
+      </PanelSectionRow>
+      <DeckRow layout="below" onClick={() => void setScreen(!state.voice.screen_capture)}>
+        {state.voice.screen_capture ? "Screen capture: on" : "Screen capture: off"}
+      </DeckRow>
+    </PanelSection>,
+  );
+
+  const privacyPage = shell(
+    <PanelSection title="Privacy and Web">
+      <PanelSectionRow>
+        <div>Keys and microphone audio stay on this Deck.</div>
+      </PanelSectionRow>
+      <DeckRow layout="below" onClick={() => setPrivacyOpen((open) => !open)}>
+        {privacyOpen ? "Hide where data goes" : "Where data goes"}
+      </DeckRow>
+      {privacyOpen ? (
         <PanelSectionRow>
           <div>
-            Keys stay in this Deck's settings folder, mode 0600, and are not written to the log. Microphone audio stays
-            on the Deck and is deleted after each line unless debug audio is on. Game context is sent only to the
-            provider you picked, and only while sharing is on. Web lookup, when it is on, sends the search query and
-            the pages the model opens to that same provider. If an older copy is still in the Decky plugin list,
-            uninstall that entry after your providers show up here.
+            Keys stay in this Deck's settings folder and are not written to the log. Audio is deleted after each line
+            unless debug audio is on. Game context and web pages go only to the provider you picked.
           </div>
         </PanelSectionRow>
-        <DeckRow layout="below" onClick={() => void patchContext({ share_game_context: !state.context.share_game_context })}>
-          {state.context.share_game_context ? "Share game context with AI: on" : "Share game context with AI: off"}
-        </DeckRow>
-        {state.context.share_game_context ? (
-          <>
-            <DeckRow layout="below" onClick={() => void patchContext({ include_achievements: !state.context.include_achievements })}>
-              {state.context.include_achievements ? "Include achievements: on" : "Include achievements: off"}
+      ) : null}
+      <DeckRow layout="below" onClick={() => void patchContext({ share_game_context: !state.context.share_game_context })}>
+        {state.context.share_game_context ? "Share game context with AI: on" : "Share game context with AI: off"}
+      </DeckRow>
+      {state.context.share_game_context ? (
+        <>
+          <DeckRow layout="below" onClick={() => void patchContext({ include_achievements: !state.context.include_achievements })}>
+            {state.context.include_achievements ? "Include achievements: on" : "Include achievements: off"}
+          </DeckRow>
+          <DeckRow layout="below" onClick={() => void patchContext({ include_playtime: !state.context.include_playtime })}>
+            {state.context.include_playtime ? "Include playtime: on" : "Include playtime: off"}
+          </DeckRow>
+        </>
+      ) : null}
+      <DeckRow layout="below" onClick={() => void patchWeb({ enabled: !state.web.enabled })}>
+        {state.web.enabled ? "Web lookup: on" : "Web lookup: off"}
+      </DeckRow>
+      {state.web.enabled ? (
+        <>
+          <DeckRow layout="below" onClick={cycleSearch}>
+            {`Search: ${SEARCH_LABEL[state.web.provider] || "DuckDuckGo"}`}
+          </DeckRow>
+          {state.web.provider !== "duckduckgo" ? (
+            <DeckRow layout="below" onClick={openSearch}>
+              Edit search setup
             </DeckRow>
-            <DeckRow layout="below" onClick={() => void patchContext({ include_playtime: !state.context.include_playtime })}>
-              {state.context.include_playtime ? "Include playtime: on" : "Include playtime: off"}
-            </DeckRow>
-          </>
-        ) : null}
-        <DeckRow layout="below" onClick={() => void patchWeb({ enabled: !state.web.enabled })}>
-          {state.web.enabled ? "Web lookup: on" : "Web lookup: off"}
-        </DeckRow>
-        {state.web.enabled ? (
-          <>
-            <DeckRow layout="below" onClick={cycleSearch}>
-              {`Search: ${SEARCH_LABEL[state.web.provider] || "DuckDuckGo"}`}
-            </DeckRow>
-            {state.web.provider !== "duckduckgo" ? (
-              <DeckRow layout="below" onClick={openSearch}>
-                Edit search setup
-              </DeckRow>
-            ) : null}
-          </>
-        ) : null}
-      </PanelSection>
+          ) : null}
+        </>
+      ) : null}
+    </PanelSection>,
+  );
 
+  const saveKeep = (keep: number) => {
+    void saveChats({ keep }).then((result) => {
+      if (!result.ok || !result.chats) {
+        report(result.error || "Could not save chat history");
+        return;
+      }
+      setState((prev) => ({
+        ...prev,
+        chats: { ...defaultChats(), ...result.chats },
+        sessions: result.sessions || prev.sessions,
+      }));
+    });
+  };
+
+  const chatsPage = shell(
+    <PanelSection title="Chats">
+      <PanelSectionRow>
+        <div>How many chats to keep, and whether each one remembers its model.</div>
+      </PanelSectionRow>
+      <DeckRow layout="below" onClick={() => saveKeep(state.chats.keep === 20 ? 40 : state.chats.keep === 40 ? 80 : 20)}>
+        {`Keep chats: ${state.chats.keep}`}
+      </DeckRow>
+      <DeckRow
+        layout="below"
+        onClick={() => {
+          void saveChats({ remember_model: !state.chats.remember_model }).then((result) => {
+            if (!result.ok || !result.chats) {
+              report(result.error || "Could not save chat history");
+              return;
+            }
+            setState((prev) => ({ ...prev, chats: { ...defaultChats(), ...result.chats } }));
+          });
+        }}
+      >
+        {state.chats.remember_model ? "Remember model per chat: on" : "Remember model per chat: off"}
+      </DeckRow>
+    </PanelSection>,
+  );
+
+  const advancedPage = shell(
+    <>
+      {status}
       <PanelSection title="Advanced">
         <PanelSectionRow>
-          <div>The default provider, model, and system prompt. Typing happens in a dialog so the Steam keyboard stays put.</div>
+          <div>Default provider, model, and system prompt.</div>
         </PanelSectionRow>
         <DeckRow layout="below" onClick={openDefaults}>
           Edit defaults
-        </DeckRow>
-        <DeckRow
-          layout="below"
-          onClick={() => {
-            const next = state.chats.keep === 20 ? 40 : state.chats.keep === 40 ? 80 : 20;
-            void saveChats({ keep: next }).then((result) => {
-              if (!result.ok || !result.chats) {
-                report(result.error || "Could not save chat history");
-                return;
-              }
-              setState((prev) => ({
-                ...prev,
-                chats: { ...defaultChats(), ...result.chats },
-                sessions: result.sessions || prev.sessions,
-              }));
-            });
-          }}
-        >
-          {`Keep chats: ${state.chats.keep}`}
-        </DeckRow>
-        <DeckRow
-          layout="below"
-          onClick={() => {
-            void saveChats({ remember_model: !state.chats.remember_model }).then((result) => {
-              if (!result.ok || !result.chats) {
-                report(result.error || "Could not save chat history");
-                return;
-              }
-              setState((prev) => ({ ...prev, chats: { ...defaultChats(), ...result.chats } }));
-            });
-          }}
-        >
-          {state.chats.remember_model ? "Remember model per chat: on" : "Remember model per chat: off"}
         </DeckRow>
         <DeckRow layout="below" onClick={() => setShowDiagnostics((open) => !open)}>
           {showDiagnostics ? "Hide diagnostics" : "Diagnostics"}
         </DeckRow>
         {showDiagnostics ? <DiagnosticsPanel /> : null}
       </PanelSection>
+    </>,
+  );
+
+  if (layout === "tabs") {
+    return (
+      <SidebarNavigation
+        title="Deckling"
+        showTitle
+        disableRouteReporting
+        pages={[
+          { title: "Providers", content: providersPage },
+          { title: "Voice", content: voicePage },
+          { title: "Spoken replies", content: spokenPage },
+          { title: "Screen help", content: screenPage },
+          { title: "Privacy and Web", content: privacyPage },
+          { title: "Chats", content: chatsPage },
+          { title: "Advanced", content: advancedPage },
+        ]}
+      />
+    );
+  }
+
+  return (
+    <div style={{ padding: "8px 16px 24px", width: "100%", boxSizing: "border-box" }}>
+      {providersPage}
+      {voicePage}
+      {spokenPage}
+      {screenPage}
+      {privacyPage}
+      {chatsPage}
+      {advancedPage}
     </div>
   );
 }

@@ -106,6 +106,7 @@ def normalize_hearing(raw: Any) -> dict[str, Any]:
         "wake_error": "",
         "stt_backend": "",
         "install_message": "",
+        "install_progress": 0.0,
     }
     if isinstance(raw, dict):
         for key in hearing:
@@ -125,6 +126,11 @@ def normalize_hearing(raw: Any) -> dict[str, Any]:
     hearing["wake_error"] = str(hearing["wake_error"] or "")[:500]
     hearing["stt_backend"] = str(hearing["stt_backend"] or "")[:40]
     hearing["install_message"] = str(hearing["install_message"] or "")[:500]
+    try:
+        progress = float(hearing.get("install_progress") or 0)
+    except (TypeError, ValueError):
+        progress = 0.0
+    hearing["install_progress"] = max(0.0, min(1.0, progress))
     return hearing
 
 
@@ -289,6 +295,25 @@ class Store:
                 config["default_model"] = record["default_model"]
             self.save_config(config)
             return record
+
+    def set_model_vision(self, provider_id: str, model: str, enabled: bool) -> dict[str, Any]:
+        chosen = str(model or "").strip()
+        if not chosen or len(chosen) > 200:
+            raise ValueError("Choose a model before changing whether it can see images")
+        with self._lock:
+            config = self.load_config()
+            providers: list[dict[str, Any]] = list(config["providers"])
+            existing = next((item for item in providers if item.get("id") == provider_id), None)
+            if existing is None:
+                raise ValueError("That provider no longer exists")
+            overrides = _vision_override(existing.get("vision_override"))
+            overrides[chosen] = bool(enabled)
+            if len(overrides) > 40:
+                raise ValueError("Too many vision overrides on this provider")
+            existing["vision_override"] = overrides
+            config["providers"] = providers
+            self.save_config(config)
+            return existing
 
     def delete_provider(self, provider_id: str) -> None:
         with self._lock:
@@ -712,6 +737,17 @@ def _session_meta(item: dict[str, Any]) -> dict[str, Any]:
     return meta
 
 
+def _vision_override(value: Any) -> dict[str, bool]:
+    if not isinstance(value, dict):
+        return {}
+    found: dict[str, bool] = {}
+    for key, enabled in value.items():
+        model = str(key or "").strip()[:200]
+        if model:
+            found[model] = bool(enabled)
+    return found
+
+
 def _connection_status(value: Any) -> str:
     status = str(value or "unknown")
     return status if status in {"connected", "error", "unknown"} else "unknown"
@@ -737,6 +773,7 @@ def public_provider(record: dict[str, Any]) -> dict[str, Any]:
         "oauth_expires_at": int(record.get("oauth_expires_at") or 0),
         "connection_status": _connection_status(record.get("connection_status")),
         "connection_detail": str(record.get("connection_detail") or "")[:300],
+        "vision_override": _vision_override(record.get("vision_override")),
     }
 
 

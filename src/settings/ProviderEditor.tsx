@@ -7,6 +7,7 @@ import {
   deleteProvider,
   listModels,
   oauthStatus,
+  setModelVision,
   saveProvider,
   startOAuth,
   testProvider,
@@ -461,6 +462,33 @@ export function ProviderEditor({
           error={modelsError}
           visionIds={visionChoices}
         />
+        <DeckRow
+          layout="below"
+          disabled={!draft.id || !draft.default_model}
+          onClick={() => {
+            if (!draft.id || !draft.default_model) {
+              return;
+            }
+            const enabled = !visionChoices.includes(draft.default_model);
+            void setModelVision(draft.id, draft.default_model, enabled).then((result) => {
+              if (!result.ok) {
+                setModelsError(result.error || "Could not save image support");
+                return;
+              }
+              setVisionChoices((current) =>
+                enabled
+                  ? [...current.filter((id) => id !== draft.default_model), draft.default_model]
+                  : current.filter((id) => id !== draft.default_model),
+              );
+            });
+          }}
+        >
+          {!draft.default_model
+            ? "Pick a model to set image support"
+            : visionChoices.includes(draft.default_model)
+              ? "This model can see images"
+              : "This model cannot see images"}
+        </DeckRow>
         </div>
         <PanelSectionRow>
           <TextField

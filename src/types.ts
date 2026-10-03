@@ -23,6 +23,7 @@ export interface PublicProvider {
   oauth_expires_at: number;
   connection_status: string;
   connection_detail: string;
+  vision_override?: Record<string, boolean>;
 }
 
 export interface ChatMessage {
@@ -77,6 +78,7 @@ export interface HearingSettings {
   wake_error: string;
   stt_backend: string;
   install_message: string;
+  install_progress: number;
   phase: string;
   wake_models: { id: string; label: string }[];
   stt_models: string[];
@@ -95,6 +97,7 @@ export function defaultHearing(): HearingSettings {
     wake_error: "",
     stt_backend: "",
     install_message: "",
+    install_progress: 0,
     phase: "off",
     wake_models: [
       { id: "hey_jarvis", label: "hey jarvis" },

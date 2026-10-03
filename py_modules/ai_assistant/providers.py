@@ -14,6 +14,7 @@ from . import claude_code, vision
 from .http_util import HttpError, iter_lines, join_url, request_json
 from .redact import redact
 from .sse import iter_json_lines, iter_sse_json
+from .vision import row_sees_images
 
 ANTHROPIC_VERSION = "2023-06-01"
 _CONTEXT_MESSAGES = 40
@@ -41,32 +42,44 @@ def prepare_messages(provider: dict[str, Any], history: list[dict[str, str]], sy
     return messages
 
 
-def list_models(provider: dict[str, Any]) -> list[str]:
+class ModelReport:
+    def __init__(self, ids: list[str], vision: list[str]) -> None:
+        self.ids = ids
+        self.vision = vision
+
+
+def describe_models(provider: dict[str, Any]) -> ModelReport:
     kind = str(provider.get("kind") or "")
-    dispatch = {
-        "openai": _list_openai_models,
-        "hermes": _list_openai_models,
-        "llamacpp": _list_openai_models,
-        "custom": _list_openai_models,
-        "anthropic": _list_anthropic_models,
-        "gemini": _list_gemini_models,
-        "ollama": _list_ollama_models,
-        "xai": _list_openai_models,
-        "claude_code": claude_code.list_models,
-    }
-    handler = dispatch.get(kind)
-    if handler is None:
+    if kind in {"openai", "hermes", "xai", "llamacpp", "custom"}:
+        report = _describe_openai_models(provider)
+    elif kind == "ollama":
+        report = _describe_ollama_models(provider)
+    elif kind == "anthropic":
+        ids = _list_anthropic_models(provider)
+        report = ModelReport(ids, [item for item in ids if vision.model_sees_images(item)])
+    elif kind == "gemini":
+        ids = _list_gemini_models(provider)
+        report = ModelReport(ids, [item for item in ids if vision.model_sees_images(item)])
+    elif kind == "claude_code":
+        ids = claude_code.list_models(provider)
+        report = ModelReport(ids, [])
+    else:
         raise ValueError(f"Unknown provider type: {kind}")
-    models = handler(provider)
     if kind == "hermes":
-        hermes = [item for item in models if "hermes" in item.lower()]
+        hermes = [item for item in report.ids if "hermes" in item.lower()]
         if hermes:
-            return hermes
+            report.ids = hermes
     if kind == "openai":
-        chat = [item for item in models if _looks_like_chat_model(item)]
+        chat = [item for item in report.ids if _looks_like_chat_model(item)]
         if chat:
-            return chat
-    return models
+            report.ids = chat
+    allowed = set(report.ids)
+    report.vision = [item for item in report.vision if item in allowed]
+    return report
+
+
+def list_models(provider: dict[str, Any]) -> list[str]:
+    return describe_models(provider).ids
 
 
 def iter_text(
@@ -233,27 +246,109 @@ def _looks_like_chat_model(model_id: str) -> bool:
     return lower.startswith(("gpt-", "chatgpt-", "o1", "o3", "o4", "ft:"))
 
 
-def _ids_from_openai_payload(payload: Any) -> list[str]:
+def _row_name(row: dict[str, Any]) -> str:
+    name = row.get("id") or row.get("name") or row.get("model")
+    return name.strip() if isinstance(name, str) else ""
+
+
+def _merge_row(current: dict[str, Any], row: dict[str, Any]) -> None:
+    caps = [str(item) for item in current.get("capabilities") or [] if isinstance(current.get("capabilities"), list)]
+    extra = row.get("capabilities")
+    if isinstance(extra, list):
+        caps.extend(str(item) for item in extra)
+    for key, value in row.items():
+        if value not in (None, "", []):
+            current[key] = value
+    if caps:
+        current["capabilities"] = caps
+
+
+def _models_from_openai_payload(payload: Any, props_vision: bool | None = None) -> tuple[list[str], list[str]]:
     if not isinstance(payload, dict):
-        return []
-    found: list[str] = []
-    rows = payload.get("data")
+        return [], []
+    data_rows = [row for row in payload.get("data") or [] if isinstance(row, dict) and _row_name(row)]
+    model_rows = [row for row in payload.get("models") or [] if isinstance(row, dict) and _row_name(row)]
+    chosen = data_rows or model_rows
+    by_name: dict[str, dict[str, Any]] = {}
+    for row in chosen:
+        name = _row_name(row)
+        by_name.setdefault(name, {"id": name})
+        _merge_row(by_name[name], row)
+    if data_rows:
+        for row in model_rows:
+            name = _row_name(row)
+            if name in by_name:
+                _merge_row(by_name[name], row)
+    ids = sorted(by_name)
+    seen = [name for name, row in by_name.items() if row_sees_images(row, props_vision)]
+    return ids, sorted(set(seen))
+
+
+def _ids_from_openai_payload(payload: Any) -> list[str]:
+    ids, _vision = _models_from_openai_payload(payload, None)
+    return ids
+
+
+def _llamacpp_props_vision(provider: dict[str, Any]) -> bool | None:
+    """llama.cpp serves ``/props`` with ``modalities.vision`` next to the server root."""
+    if provider.get("kind") != "llamacpp":
+        return None
+    base = _base(provider)
+    parts = urllib.parse.urlsplit(base)
+    path = parts.path.rstrip("/")
+    if path.endswith("/v1"):
+        path = path[: -len("/v1")]
+    root = urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+    try:
+        payload = request_json("GET", join_url(root or base, "props"), headers=_auth_headers(provider), timeout=8)
+    except (HttpError, OSError, ValueError):
+        return None
+    modalities = payload.get("modalities") if isinstance(payload, dict) else None
+    if isinstance(modalities, dict) and "vision" in modalities:
+        return bool(modalities.get("vision"))
+    return None
+
+
+def _openai_rows(provider: dict[str, Any]) -> tuple[list[str], list[str]]:
+    payload = request_json(
+        "GET",
+        join_url(_openai_root(provider), "models"),
+        headers=_auth_headers(provider),
+        timeout=20,
+    )
+    props = _llamacpp_props_vision(provider)
+    return _models_from_openai_payload(payload, props)
+
+
+def _describe_openai_models(provider: dict[str, Any]) -> ModelReport:
+    if provider.get("kind") in {"openai", "hermes", "xai"}:
+        require_credentials(provider)
+    try:
+        ids, seen = _openai_rows(provider)
+    except (HttpError, OSError) as exc:
+        if provider.get("kind") == "llamacpp":
+            raise _explain_llamacpp(exc, provider) from exc
+        raise
+    return ModelReport(ids, seen)
+
+
+def _describe_ollama_models(provider: dict[str, Any]) -> ModelReport:
+    headers = _auth_headers(provider)
+    payload = request_json("GET", join_url(_base(provider), "api/tags"), headers=headers, timeout=15)
+    rows = payload.get("models") if isinstance(payload, dict) else None
+    ids: list[str] = []
+    seen: list[str] = []
     if isinstance(rows, list):
         for row in rows:
-            if isinstance(row, dict) and isinstance(row.get("id"), str) and row["id"]:
-                found.append(row["id"])
-    if found:
-        return sorted(set(found))
-    # Some llama.cpp builds list ``models[].name`` and omit ``data[].id``.
-    models = payload.get("models")
-    if isinstance(models, list):
-        for row in models:
             if not isinstance(row, dict):
                 continue
-            name = row.get("id") or row.get("name") or row.get("model")
-            if isinstance(name, str) and name:
-                found.append(name)
-    return sorted(set(found))
+            name = row.get("name") or row.get("model")
+            if not isinstance(name, str) or not name:
+                continue
+            ids.append(name)
+            if row_sees_images(row, None) or vision.model_sees_images(name):
+                seen.append(name)
+    return ModelReport(sorted(set(ids)), sorted(set(seen)))
 
 
 def _xai_http_message(exc: HttpError) -> str:
@@ -272,18 +367,7 @@ def _xai_http_message(exc: HttpError) -> str:
 def _list_openai_models(provider: dict[str, Any]) -> list[str]:
     if provider.get("kind") in {"openai", "hermes", "xai"}:
         require_credentials(provider)
-    try:
-        payload = request_json(
-            "GET",
-            join_url(_openai_root(provider), "models"),
-            headers=_auth_headers(provider),
-            timeout=20,
-        )
-    except (HttpError, OSError) as exc:
-        if provider.get("kind") == "llamacpp":
-            raise _explain_llamacpp(exc, provider) from exc
-        raise
-    return _ids_from_openai_payload(payload)
+    return _describe_openai_models(provider).ids
 
 
 def _list_anthropic_models(provider: dict[str, Any]) -> list[str]:

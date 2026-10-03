@@ -93,7 +93,7 @@ def test_llamacpp_keeps_an_existing_v1_suffix_and_sends_the_api_key() -> None:
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
-            captured["path"] = self.path
+            captured.setdefault("paths", []).append(self.path)
             captured["auth"] = self.headers.get("Authorization") or ""
             body = json.dumps({"data": [{"id": "tiny"}, {"id": "other"}]}).encode()
             self.send_response(200)
@@ -119,7 +119,8 @@ def test_llamacpp_keeps_an_existing_v1_suffix_and_sends_the_api_key() -> None:
         server.shutdown()
 
     assert models == ["other", "tiny"]
-    assert captured["path"] == "/v1/models"
+    assert captured["paths"][0] == "/v1/models"
+    assert "/props" in captured["paths"]
     assert captured["auth"] == "Bearer deck-secret"
 
 

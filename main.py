@@ -3,7 +3,7 @@ import sys
 # Single event name the Quick Access panel and the settings page both listen for.
 EVENT = "deckling_event"
 LEGACY_NAME = "AI Assistant"
-VERSION = "0.1.0-rc.13"
+VERSION = "0.1.0-rc.14"
 _BOOT_ERROR = ""
 _BOOT_TRACE = ""
 
@@ -223,6 +223,9 @@ class Plugin:
 
     async def list_models(self, provider_id: str) -> dict:
         return await self._acall("list_models", provider_id)
+
+    async def set_model_vision(self, provider_id: str, model: str, enabled: bool) -> dict:
+        return self._call("set_model_vision", provider_id, model, enabled)
 
     async def send_message(
         self,

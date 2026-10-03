@@ -25,7 +25,8 @@ from typing import Any
 from .audio_in import capture_command, deck_audio_env
 from .diagnostics import remember
 from .http_util import USER_AGENT
-from .interpreter import frozen_runtime, system_python
+from .interpreter import frozen_runtime
+from .runtime_python import ensure_runtime_python, ensure_voice_venv
 from .store import Store, normalize_hearing
 from .vad import MAX_MS, NO_SPEECH_MS, RATE, THRESHOLD, rms, speech_region
 from .vision import wants_screen_look
@@ -288,6 +289,7 @@ class HearingEngine:
         self.which = which or shutil.which
         self.run = run or _run
         self.machine = machine or _machine()
+        self._explicit_python = python
         self.python = python or _resolve_python()
         self.autostart = True
         self._phase = "off"
@@ -353,6 +355,7 @@ class HearingEngine:
 
     def install(self) -> dict[str, Any]:
         hearing = self.public()
+        self._prepare_python()
         self._say("Downloading the wake word model", 0.05)
         try:
             self._download_wake_files(hearing["wake_model"])
@@ -374,11 +377,34 @@ class HearingEngine:
                         )[:500]
                     }
                 )
-        backend = self._install_stt(hearing["stt_model"])
+        try:
+            backend = self._install_stt(hearing["stt_model"])
+        except Exception as exc:  # noqa: BLE001 - the listen loop keeps running
+            self.store.update_hearing(
+                {
+                    "stt_backend": "",
+                    "install_message": f"Speech recognition failed. {exc}"[:500],
+                    "install_progress": 0,
+                }
+            )
+            self.notify({"type": "hearing", "phase": "error", "message": f"Speech recognition failed. {exc}"[:300]})
+            return self.public()
         self.store.update_hearing(
-            {"stt_backend": backend, "install_message": f"Speech recognition: {backend}. {IDLE_NOTE}"}
+            {
+                "stt_backend": backend,
+                "install_message": f"Speech recognition: {backend}. {IDLE_NOTE}",
+                "install_progress": 1,
+            }
         )
         return self.public()
+
+    def _prepare_python(self) -> None:
+        """Tests pass an interpreter. The Deck downloads one that has pip."""
+        if self._explicit_python:
+            self.python = self._explicit_python
+            return
+        base = ensure_runtime_python(self.store.runtime_dir, self.fetch, self._progress, self.machine)
+        self.python = ensure_voice_venv(self.store.runtime_dir, base)
 
     def dispatch(self, text: str) -> str:
         action = classify_phrase(text, self.pending())
@@ -647,12 +673,16 @@ class HearingEngine:
             self.fetch(GGML_URL.format(model=model), dest, self._progress)
 
     def _pip(self, packages: tuple[str, ...]) -> None:
-        target = self._target()
-        os.makedirs(target, exist_ok=True)
         env = deck_audio_env(os.geteuid())
         env.pop("LD_LIBRARY_PATH", None)
         env["PYTHONNOUSERSITE"] = "1"
-        command = pip_command(self._argv()[0], target, packages)
+        python = self._argv()[0]
+        if self._explicit_python:
+            target = self._target()
+            os.makedirs(target, exist_ok=True)
+            command = pip_command(python, target, packages)
+        else:
+            command = [python, "-m", "pip", "install", "--disable-pip-version-check", *packages]
         self.run(command, env)
 
     def _transcribe_whisper_cpp(self, path: str, model: str) -> str:
@@ -748,11 +778,13 @@ class HearingEngine:
         self.notify({"type": "hearing", "phase": phase, "message": message})
 
     def _say(self, message: str, fraction: float) -> None:
-        self.store.update_hearing({"install_message": message})
-        self.notify({"type": "hearing", "phase": "install", "message": message, "progress": fraction})
+        self._progress(message, fraction)
 
     def _progress(self, message: str, fraction: float) -> None:
-        self.notify({"type": "hearing", "phase": "install", "message": message, "progress": fraction})
+        percent = max(0, min(100, int(float(fraction) * 100)))
+        text = f"{message} ({percent}%)"
+        self.store.update_hearing({"install_message": text[:500], "install_progress": float(fraction)})
+        self.notify({"type": "hearing", "phase": "install", "message": text, "progress": fraction})
 
     def _stop_procs(self) -> None:
         with self._lock:
@@ -817,10 +849,8 @@ def _machine() -> str:
 
 
 def _resolve_python() -> str:
-    try:
-        return system_python()
-    except RuntimeError:
-        return sys.executable
+    """Placeholder until install() downloads the private interpreter."""
+    return sys.executable
 
 
 def _last_json(raw: bytes) -> dict[str, Any]:
