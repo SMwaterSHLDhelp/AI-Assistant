@@ -6,6 +6,13 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [Unreleased]
 
+## [0.1.0-rc.11] - 2026-10-03
+
+### Fixed
+
+- Backend calls no longer all time out on Decky Loader. The loader's Python is a PyInstaller build that does not include `pty`, `wave`, `html.parser`, or `urllib.robotparser`. Importing those at startup made the plugin process exit before it could answer, so health and Save provider reported a timeout. Those modules are now bundled and loaded only when the interpreter does not already have them.
+- If startup still fails, the traceback is written to ~/Deckling-diagnostics.txt and to the plugin log folder, and health returns the error instead of the process exiting. A call that gets no answer says "Backend not responding" and points at ~/homebrew/logs/Deckling/. Decky's Developer tab shows the UI console, not that Python log.
+
 ## [0.1.0-rc.10] - 2026-10-03
 
 ### Fixed

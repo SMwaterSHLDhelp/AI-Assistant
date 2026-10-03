@@ -28,6 +28,10 @@ import { HearingSection } from "./HearingSection";
 import { VoiceSection } from "./VoiceSection";
 
 const SEARCH_ORDER = ["duckduckgo", "searxng", "brave", "tavily", "serper"];
+
+function backendUnreachable(message: string): boolean {
+  return /backend not responding|timed out/i.test(message);
+}
 const SEARCH_LABEL: Record<string, string> = {
   duckduckgo: "DuckDuckGo",
   searxng: "SearXNG",
@@ -102,12 +106,12 @@ export function SettingsPage() {
           return;
         }
         lastError = loaded.error || lastError;
-        if (lastError.includes("timed out")) {
+        if (backendUnreachable(lastError)) {
           break;
         }
       } catch (err) {
         lastError = errorMessage(err, lastError);
-        if (lastError.includes("timed out")) {
+        if (backendUnreachable(lastError)) {
           break;
         }
       }

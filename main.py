@@ -1,6 +1,7 @@
 import logging
 import os
 import shutil
+import traceback
 
 import decky
 
@@ -11,7 +12,7 @@ from ai_assistant.service import AssistantService
 # Single event name the Quick Access panel and the settings page both listen for.
 EVENT = "deckling_event"
 LEGACY_NAME = "AI Assistant"
-VERSION = "0.1.0-rc.10"
+VERSION = "0.1.0-rc.11"
 
 
 class Plugin:
@@ -21,7 +22,12 @@ class Plugin:
     _boot_error: str = ""
 
     async def _migration(self) -> None:
-        migrate_legacy(decky.DECKY_PLUGIN_SETTINGS_DIR, decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger.info)
+        # Decky runs this before the method socket exists. An exception here
+        # makes the loader exit the process, and every later call times out.
+        try:
+            migrate_legacy(decky.DECKY_PLUGIN_SETTINGS_DIR, decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger.info)
+        except Exception as exc:  # noqa: BLE001 - stay up so health can report this
+            self._fail("Deckling could not migrate the previous install.", exc)
 
     async def _main(self) -> None:
         self._boot_error = ""
@@ -40,8 +46,19 @@ class Plugin:
             os.chmod(decky.DECKY_PLUGIN_SETTINGS_DIR, 0o700)
             decky.logger.info("Deckling ready")
         except Exception as exc:  # noqa: BLE001 - keep the process up so the UI can show this
-            self._boot_error = redact(str(exc)) or "Deckling failed to start."
-            decky.logger.error("Deckling failed to start: %s", self._boot_error)
+            self._fail("Deckling failed to start.", exc)
+
+    def _fail(self, summary: str, exc: BaseException) -> None:
+        detail = redact(traceback.format_exc())
+        self._boot_error = redact(str(exc)) or summary
+        decky.logger.error("%s %s", summary, self._boot_error)
+        remember(self._boot_error)
+        header = f"Deckling {VERSION} failed to start\n{summary}\n{self._boot_error}"
+        for path in _boot_paths():
+            try:
+                write_report(path, [detail], header)
+            except Exception:
+                decky.logger.warning("Could not write the startup error to %s", path)
 
     async def _unload(self) -> None:
         decky.logger.info("Deckling unloading")
@@ -236,6 +253,14 @@ class Plugin:
         except Exception as exc:  # noqa: BLE001 - returned to the UI, never logged raw
             decky.logger.warning("%s failed: %s", name, redact(str(exc)))
             return {"ok": False, "error": redact(str(exc))}
+
+
+def _boot_paths() -> list[str]:
+    paths = [diagnostics_path()]
+    log_dir = os.environ.get("DECKY_PLUGIN_LOG_DIR")
+    if log_dir:
+        paths.append(os.path.join(log_dir, "boot-error.txt"))
+    return paths
 
 
 def _install_log_ring() -> None:

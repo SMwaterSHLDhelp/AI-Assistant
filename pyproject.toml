@@ -6,6 +6,7 @@ pythonpath = ["py_modules"]
 target-version = "py311"
 line-length = 140
 src = ["main.py", "py_modules", "tests", "bridge", "scripts"]
+extend-exclude = ["py_modules/ai_assistant/_frozen"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

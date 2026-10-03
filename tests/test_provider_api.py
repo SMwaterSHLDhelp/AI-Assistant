@@ -135,6 +135,33 @@ def test_legacy_ai_assistant_files_are_copied_once(tmp_path) -> None:
     asyncio.run(run())
 
 
+def test_migration_failure_is_written_down_and_does_not_escape(tmp_path, monkeypatch) -> None:
+    main = _load_plugin(tmp_path)
+    monkeypatch.setenv("DECKY_USER_HOME", str(tmp_path))
+    monkeypatch.setenv("DECKY_PLUGIN_LOG_DIR", str(tmp_path / "logs"))
+
+    def boom(*_args: object) -> None:
+        raise RuntimeError("migration disk full")
+
+    monkeypatch.setattr(main, "migrate_legacy", boom)
+
+    async def run() -> None:
+        plugin = main.Plugin()
+        await plugin._migration()
+        health = await plugin.health()
+        assert health["ok"] is False
+        assert "migration disk full" in health["error"]
+
+    asyncio.run(run())
+    report = tmp_path / "Deckling-diagnostics.txt"
+    boot = tmp_path / "logs" / "boot-error.txt"
+    assert report.is_file()
+    assert "migration disk full" in report.read_text(encoding="utf-8")
+    assert stat.S_IMODE(report.stat().st_mode) == 0o600
+    assert boot.is_file()
+    assert "Traceback" in boot.read_text(encoding="utf-8")
+
+
 def test_a_startup_failure_stays_on_screen_instead_of_killing_the_process(tmp_path, monkeypatch) -> None:
     main = _load_plugin(tmp_path)
 
@@ -143,6 +170,8 @@ def test_a_startup_failure_stays_on_screen_instead_of_killing_the_process(tmp_pa
             raise RuntimeError("settings dir is not writable")
 
     monkeypatch.setattr(main, "AssistantService", Boom)
+    monkeypatch.setenv("DECKY_USER_HOME", str(tmp_path))
+    monkeypatch.setenv("DECKY_PLUGIN_LOG_DIR", str(tmp_path / "logs"))
 
     async def run() -> None:
         plugin = main.Plugin()
@@ -158,6 +187,9 @@ def test_a_startup_failure_stays_on_screen_instead_of_killing_the_process(tmp_pa
         assert any("not writable" in line for line in report["lines"])
 
     asyncio.run(run())
+    written = (tmp_path / "Deckling-diagnostics.txt").read_text(encoding="utf-8")
+    assert "not writable" in written
+    assert "Traceback" in written
 
 
 def test_legacy_copy_skips_a_path_that_is_itself(tmp_path) -> None:

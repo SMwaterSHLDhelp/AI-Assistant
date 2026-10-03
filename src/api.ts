@@ -26,6 +26,14 @@ type SessionResult = OkResult & {
 
 const CALL_MS = 15000;
 
+// Decky's websocket has no timeout of its own. This fires when the Python
+// process never opened its socket (it exited during import) or never replied.
+export const BACKEND_DOWN =
+  "Backend not responding. Deckling's Python process did not answer, so this screen cannot show the traceback. " +
+  "The plugin log is ~/homebrew/logs/Deckling/ (open the newest file in Desktop Mode). " +
+  "Decky's Developer tab (settings gear, General, enable Developer) shows the CEF console for the UI, not that Python log. " +
+  "The loader log is ~/homebrew/logs/ or journalctl -u plugin_loader.";
+
 type BannerHost = { __decklingBanner?: (message: string) => void };
 
 export const logClient = callable<[message: string], OkResult>("log_client");
@@ -65,7 +73,7 @@ function deckyCall<A extends unknown[], R>(name: string): (...args: A) => Promis
         fn(...args),
         new Promise<R>((_resolve, reject) => {
           timer = setTimeout(() => {
-            reject(new Error(`${name} timed out. The Deckling backend did not answer.`));
+            reject(new Error(BACKEND_DOWN));
           }, CALL_MS);
         }),
       ]);

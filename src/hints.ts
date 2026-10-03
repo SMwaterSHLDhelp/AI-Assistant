@@ -14,6 +14,9 @@ export function nextStep(error: string): string {
   if (/screen capture is turned off/i.test(text)) {
     return `${text} Turn it on under Screen help in settings.`;
   }
+  if (/backend not responding/i.test(text)) {
+    return text;
+  }
   if (/timed out|connection|refused|unreachable|could not connect/i.test(text)) {
     return `${text} Check the address, and allow that port through the PC firewall.`;
   }
