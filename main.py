@@ -49,6 +49,12 @@ class Plugin:
             return {"ok": False, "error": "Deckling is still starting."}
         return self._call(self.service.state)
 
+    async def log_client(self, message: str) -> dict:
+        text = redact(str(message or "")).replace("\n", " ").strip()[:400]
+        if text:
+            decky.logger.warning("UI: %s", text)
+        return {"ok": True}
+
     async def save_provider(self, provider: dict) -> dict:
         return self._call(self.service.save_provider, provider)
 

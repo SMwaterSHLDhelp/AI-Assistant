@@ -84,11 +84,56 @@ export function ModalRoot({
   onCancel?: () => void;
 }) {
   return (
-    <div role="dialog">
+    <div role="dialog" className="deckling-dialog">
       {children}
       <button type="button" onClick={onCancel}>
         Close
       </button>
+    </div>
+  );
+}
+
+export function DialogHeader({ children }: { children?: ReactNode }) {
+  return <h1>{children}</h1>;
+}
+
+export function DialogBody({ children }: { children?: ReactNode }) {
+  return <div>{children}</div>;
+}
+
+export function DialogFooter({ children }: { children?: ReactNode }) {
+  return <footer>{children}</footer>;
+}
+
+export function DialogButton({
+  children,
+  onClick,
+  disabled,
+}: {
+  children?: ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button type="button" disabled={disabled} onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
+export function SidebarNavigation({
+  children,
+  pages,
+}: {
+  children?: ReactNode;
+  pages?: { content?: ReactNode }[];
+}) {
+  return (
+    <div>
+      {pages?.map((page, index) => (
+        <div key={index}>{page.content}</div>
+      ))}
+      {children}
     </div>
   );
 }

@@ -2,10 +2,10 @@ import { definePlugin, routerHook } from "@decky/api";
 import { staticClasses } from "@decky/ui";
 import { FaRobot } from "react-icons/fa";
 import { ChatPanel } from "./chat/ChatPanel";
-import { SettingsPage } from "./settings/SettingsPage";
+import { SettingsRoute } from "./settings/SettingsRoute";
 
 export default definePlugin(() => {
-  routerHook.addRoute("/deckling/settings", SettingsPage, { exact: true });
+  routerHook.addRoute("/deckling/settings", SettingsRoute, { exact: true });
 
   return {
     name: "Deckling",

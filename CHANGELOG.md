@@ -6,6 +6,14 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [Unreleased]
 
+## [0.1.0-rc.9] - 2026-10-03
+
+### Fixed
+
+- Save provider works with a name, a type, and a key or URL. The model can stay blank. After a successful save, the model list loads in the same dialog.
+- The settings page uses Steam's settings layout. Provider dialogs scroll, and Save stays in the dialog footer. The Steam action bar stays at the bottom of the screen instead of covering the provider list, so those buttons receive the A button and touch.
+- A failed save or model list shows the reason and writes it to the plugin log.
+
 ## [0.1.0-rc.8] - 2026-10-03
 
 ### Added

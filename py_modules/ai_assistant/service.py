@@ -277,8 +277,10 @@ class AssistantService:
         try:
             models = await asyncio.to_thread(providers.list_models, provider)
         except (HttpError, ValueError, OSError, ClaudeCodeError) as exc:
-            self.store.set_connection(provider_id, "error", str(exc))
-            return _fail(str(exc))
+            message = redact(str(exc))
+            self.host.warning("Model list failed kind=%s: %s", provider.get("kind"), message)
+            self.store.set_connection(provider_id, "error", message)
+            return _fail(message)
         shown = models[:80]
         detail = f"Connected. {len(models)} model{'s' if len(models) != 1 else ''} available."
         self.store.set_connection(provider_id, "connected", detail)

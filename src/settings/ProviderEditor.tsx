@@ -1,5 +1,5 @@
 import { addEventListener, removeEventListener } from "@decky/api";
-import { ButtonItem, ModalRoot, Navigation, PanelSection, PanelSectionRow, TextField } from "@decky/ui";
+import { ButtonItem, DialogButton, Navigation, PanelSection, PanelSectionRow, TextField } from "@decky/ui";
 import { useEffect, useState } from "react";
 import {
   cancelOAuth,
@@ -13,9 +13,11 @@ import {
 import { PROVIDER_KINDS, kindInfo } from "../catalog";
 import { fieldValue } from "../form";
 import { ModelPicker } from "../ModelPicker";
+import { reportFailure, reportSaved } from "../notify";
 import { errorMessage, withRetry } from "../retry";
 import { copyText } from "../steam";
 import type { BackendEvent, ProviderInput, ProviderKindInfo, PublicProvider } from "../types";
+import { SettingsDialog } from "./dialog";
 
 export interface Draft {
   id: string;
@@ -152,9 +154,11 @@ export function ProviderEditor({
           return;
         }
         if (!result.ok) {
-          setModelsError(result.error || "Could not list models");
+          const message = result.error || "Could not list models";
+          setModelsError(message);
           setModelChoices([]);
           setVisionChoices([]);
+          reportFailure(message);
           return;
         }
         const found = result.models || [];
@@ -166,9 +170,14 @@ export function ProviderEditor({
           }
           return { ...prev, default_model: found[0] };
         });
+        requestAnimationFrame(() => {
+          document.getElementById("deckling-model-picker")?.scrollIntoView({ block: "nearest" });
+        });
       } catch (err) {
         if (!cancelled) {
-          setModelsError(errorMessage(err, "Could not list models"));
+          const message = errorMessage(err, "Could not list models");
+          setModelsError(message);
+          reportFailure(message);
         }
       } finally {
         if (!cancelled) {
@@ -200,9 +209,16 @@ export function ProviderEditor({
   };
 
   const save = async () => {
+    const name = draft.name.trim();
+    if (!name || name.length > 80) {
+      const message = "Provider name must be 1-80 characters";
+      setError(message);
+      onError(message);
+      return;
+    }
     const payload: ProviderInput = {
       kind: draft.kind,
-      name: draft.name.trim(),
+      name,
       base_url: draft.base_url.trim(),
       default_model: draft.default_model.trim(),
       max_tokens: Number(draft.max_tokens) || 1024,
@@ -233,7 +249,9 @@ export function ProviderEditor({
       return;
     }
     setError("");
+    setModelsError("");
     setNotice("Provider saved. Keys stay in the plugin settings folder and are not shown again.");
+    reportSaved("Provider saved. Loading models.");
     setDraft(draftFromProvider(result.provider));
     setModelReload((value) => value + 1);
     await onSaved();
@@ -320,7 +338,16 @@ export function ProviderEditor({
   };
 
   return (
-    <ModalRoot onCancel={onClose} bDisableBackgroundDismiss>
+    <SettingsDialog
+      title={draft.id ? "Edit provider" : "New provider"}
+      onClose={onClose}
+      footer={
+        <>
+          <DialogButton onClick={() => void save()}>Save provider</DialogButton>
+          <DialogButton onClick={onClose}>Cancel</DialogButton>
+        </>
+      }
+    >
       <PanelSection title={draft.id ? "Edit provider" : "New provider"}>
         <PanelSectionRow>
           <div>{`Type: ${kind?.label || draft.kind}. The highlighted choice is the one that will be saved.`}</div>
@@ -355,9 +382,10 @@ export function ProviderEditor({
           <div>
             {draft.kind === "claude_code"
               ? "Leave the bridge URL empty to run Claude Code on this Deck. For a PC on your LAN, use http://that-pc:8765."
-              : "The model id can be typed below. Refresh models only after the provider is saved."}
+              : "Leave Model blank if you want. Save provider stores this and then loads the model list."}
           </div>
         </PanelSectionRow>
+        <div id="deckling-model-picker">
         <ModelPicker
           label="Model"
           models={modelChoices}
@@ -374,6 +402,7 @@ export function ProviderEditor({
           error={modelsError}
           visionIds={visionChoices}
         />
+        </div>
         <PanelSectionRow>
           <TextField
             key="provider-tokens"
@@ -507,9 +536,6 @@ export function ProviderEditor({
             <div>{notice}</div>
           </PanelSectionRow>
         ) : null}
-        <ButtonItem layout="below" onClick={() => void save()}>
-          Save provider
-        </ButtonItem>
         <ButtonItem layout="below" disabled={!draft.id} onClick={() => void test()}>
           Test connection
         </ButtonItem>
@@ -531,11 +557,8 @@ export function ProviderEditor({
             </ButtonItem>
           </>
         ) : null}
-        <ButtonItem layout="below" onClick={onClose}>
-          Cancel
-        </ButtonItem>
       </PanelSection>
-    </ModalRoot>
+    </SettingsDialog>
   );
 }
 

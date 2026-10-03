@@ -189,6 +189,13 @@ try {
     throw new Error(`Typing called the backend: ${callsWhileTyping.join(",")}`);
   }
   await clickButton(savePage, "llama.cpp server");
+  const saveInFooter = await savePage.evaluate(() => {
+    const footer = document.querySelector("#deckling-modal footer");
+    return Boolean(footer && footer.textContent && footer.textContent.includes("Save provider"));
+  });
+  if (!saveInFooter) {
+    throw new Error(`Save provider is not in the dialog footer:\n${await textOf(savePage)}`);
+  }
   await clickButton(savePage, "Save provider");
   await savePage.waitForFunction(() => document.body.innerText.includes("qwen-test"), { timeout: 8000 });
   await clickButton(savePage, "qwen-test");

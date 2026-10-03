@@ -101,7 +101,7 @@ That writes `out/Deckling.zip` (the Decky CLI uses the name from `plugin.json`).
 
 ## Provider setup
 
-Add a provider from the Quick Access panel's **Provider settings** button. Name, URL, and key open in their own dialog so the on-screen keyboard stays on the field you are typing. **Test connection** calls the provider's model-list endpoint and does not send a chat prompt. Pick a default provider and model on that page. The chat panel can override the model for the current session.
+Add a provider from the Quick Access panel's **Provider settings** button. Name, URL, and key open in their own dialog so the on-screen keyboard stays on the field you are typing. Save needs a name and a type, plus a key or a URL. The model can stay blank; Save then loads that server's models into the dialog. **Test connection** calls the provider's model-list endpoint and does not send a chat prompt. Pick a default provider and model on that page. The chat panel can override the model for the current session.
 
 API keys and OAuth tokens are stored in Decky's plugin settings directory (`credentials.json`, mode `0600`). The file is not world-readable, and secrets are redacted before anything is written to the plugin log. Leave a key field blank while editing to keep the saved value.
 

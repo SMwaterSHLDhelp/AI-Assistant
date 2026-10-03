@@ -24,6 +24,7 @@ type SessionResult = OkResult & {
   chats?: ChatSettings;
 };
 
+export const logClient = callable<[message: string], OkResult>("log_client");
 export const getState = callable<[], AppState & OkResult>("get_state");
 export const saveProvider = callable<[provider: ProviderInput], OkResult & { provider?: PublicProvider }>(
   "save_provider",

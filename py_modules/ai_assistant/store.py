@@ -235,7 +235,11 @@ class Store:
             from .http_util import check_url
 
             check_url(base_url if "://" in base_url else f"http://{base_url}")
-        model = str(incoming.get("default_model") or kind.default_model).strip()
+        raw_model = incoming.get("default_model")
+        if raw_model is None:
+            model = str(kind.default_model or "").strip()
+        else:
+            model = str(raw_model).strip()
         if len(model) > 200:
             raise ValueError("Model id is too long")
         try:

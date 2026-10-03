@@ -515,8 +515,8 @@ export function ChatPanel() {
         // The settings page still has the same presets.
       }
     }
-    Navigation.Navigate("/deckling/settings");
     Navigation.CloseSideMenus();
+    Navigation.Navigate("/deckling/settings");
   };
 
   const currentProvider = state.providers.find((item) => item.id === providerId);

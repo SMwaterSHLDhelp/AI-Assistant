@@ -1,12 +1,14 @@
-import { ButtonItem, ModalRoot, Navigation, PanelSection, PanelSectionRow, TextField, showModal } from "@decky/ui";
+import { ButtonItem, DialogButton, Navigation, PanelSection, PanelSectionRow, TextField, showModal } from "@decky/ui";
 import { useEffect, useState } from "react";
 import { deleteProvider, getState, saveChats, saveContext, saveSettings, saveVoice, saveWeb, testProvider } from "../api";
 import { PROVIDER_KINDS, kindInfo } from "../catalog";
 import { fieldValue } from "../form";
+import { reportFailure } from "../notify";
 import { FirstRun, PRESET_KEY, QUICK_PRESETS, presetBaseUrl } from "../onboarding";
 import { errorMessage, sleep, withRetry } from "../retry";
 import type { AppState, ContextSettings, OkResult, PublicProvider, WebSettings } from "../types";
 import { defaultChats, defaultContext, defaultHearing, defaultVoice, defaultWeb } from "../types";
+import { SettingsDialog } from "./dialog";
 import { ProviderEditor, blankDraft, draftFromProvider, type Draft } from "./ProviderEditor";
 import { HearingSection } from "./HearingSection";
 import { VoiceSection } from "./VoiceSection";
@@ -48,6 +50,7 @@ export function SettingsPage() {
 
   const report = (message: string) => {
     setError(message);
+    reportFailure(message);
   };
 
   const applyLoaded = (loaded: Partial<AppState> & OkResult) => {
@@ -95,13 +98,13 @@ export function SettingsPage() {
   };
 
   const openDraft = (initial: Draft) => {
-    let opened: { Close: () => void } | undefined;
     const wasEmpty = state.providers.length === 0;
+    const handle = { close: () => undefined as void };
     try {
-      opened = showModal(
+      const opened = showModal(
         <ProviderEditor
           initial={initial}
-          onClose={() => opened?.Close()}
+          onClose={() => handle.close()}
           onSaved={async () => {
             await load();
             if (wasEmpty) {
@@ -112,6 +115,7 @@ export function SettingsPage() {
         />,
         window,
       );
+      handle.close = () => opened.Close();
     } catch (err) {
       report(err instanceof Error ? err.message : "Could not open the provider dialog");
     }
@@ -260,7 +264,7 @@ export function SettingsPage() {
   };
 
   return (
-    <div style={{ padding: "16px 16px 48px", maxWidth: "900px", margin: "0 auto" }}>
+    <div style={{ padding: "8px 16px 24px", width: "100%", boxSizing: "border-box" }}>
       <PanelSection title="Deckling">
         <PanelSectionRow>
           <div style={{ fontSize: "15px" }}>A tiny companion for this Deck. B returns to the previous page.</div>
@@ -541,7 +545,16 @@ function DefaultsSection({
   };
 
   return (
-    <ModalRoot onCancel={onClose} bDisableBackgroundDismiss>
+    <SettingsDialog
+      title="Defaults"
+      onClose={onClose}
+      footer={
+        <>
+          <DialogButton onClick={() => void save()}>Save defaults</DialogButton>
+          <DialogButton onClick={onClose}>Cancel</DialogButton>
+        </>
+      }
+    >
       <PanelSection title="Defaults">
         {providers.length === 0 ? (
           <PanelSectionRow>
@@ -570,14 +583,8 @@ function DefaultsSection({
         <PanelSectionRow>
           <div>The system prompt is sent with every request. It is not shown as a chat bubble.</div>
         </PanelSectionRow>
-        <ButtonItem layout="below" onClick={() => void save()}>
-          Save defaults
-        </ButtonItem>
-        <ButtonItem layout="below" onClick={onClose}>
-          Cancel
-        </ButtonItem>
       </PanelSection>
-    </ModalRoot>
+    </SettingsDialog>
   );
 }
 
@@ -595,7 +602,29 @@ function SearchSetup({
   const keyField =
     web.provider === "brave" ? "brave_key" : web.provider === "tavily" ? "tavily_key" : web.provider === "serper" ? "serper_key" : "";
   return (
-    <ModalRoot onCancel={onClose} bDisableBackgroundDismiss>
+    <SettingsDialog
+      title="Search setup"
+      onClose={onClose}
+      footer={
+        <>
+          <DialogButton
+            onClick={() => {
+              const patch: Record<string, string> = {};
+              if (web.provider === "searxng") {
+                patch.searxng_url = url;
+              }
+              if (keyField && key.trim()) {
+                patch[keyField] = key.trim();
+              }
+              onSave(patch);
+            }}
+          >
+            Save
+          </DialogButton>
+          <DialogButton onClick={onClose}>Cancel</DialogButton>
+        </>
+      }
+    >
       <PanelSection title="Search setup">
         <PanelSectionRow>
           <div>
@@ -625,25 +654,7 @@ function SearchSetup({
             />
           </PanelSectionRow>
         ) : null}
-        <ButtonItem
-          layout="below"
-          onClick={() => {
-            const patch: Record<string, string> = {};
-            if (web.provider === "searxng") {
-              patch.searxng_url = url;
-            }
-            if (keyField && key.trim()) {
-              patch[keyField] = key.trim();
-            }
-            onSave(patch);
-          }}
-        >
-          Save
-        </ButtonItem>
-        <ButtonItem layout="below" onClick={onClose}>
-          Cancel
-        </ButtonItem>
       </PanelSection>
-    </ModalRoot>
+    </SettingsDialog>
   );
 }
