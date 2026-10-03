@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import urllib.parse
 from collections.abc import Callable, Iterator
@@ -60,10 +61,65 @@ def tool_spec() -> list[dict[str, Any]]:
     ]
 
 
+_TOOL_TAG = re.compile(r"<(?:tool_call|function_call)>\s*(.*?)\s*</(?:tool_call|function_call)>", re.I | re.S)
+_INTENT = re.compile(
+    r"(look(?:ing)? (?:it |this |that |them )?up"
+    r"|let me (?:search|look)"
+    r"|i(?:'|’)ll (?:search|look)"
+    r"|i will (?:search|look)"
+    r"|search(?:ing)? the web)",
+    re.I,
+)
+
+
+def text_tool_calls(blob: str) -> list[dict[str, str]]:
+    """Qwen and Hermes put calls in `<tool_call>{...}</tool_call>` instead of tool_calls."""
+    found: list[dict[str, str]] = []
+    for match in _TOOL_TAG.finditer(blob or ""):
+        payload = _loads(match.group(1))
+        name = str(payload.get("name") or "")
+        arguments: Any = payload.get("arguments", payload.get("parameters", payload.get("args")))
+        function = payload.get("function")
+        if isinstance(function, dict):
+            name = name or str(function.get("name") or "")
+            if arguments is None:
+                arguments = function.get("arguments")
+        if name not in {"web_search", "fetch_page"}:
+            continue
+        if isinstance(arguments, str):
+            encoded = arguments or "{}"
+        else:
+            encoded = json.dumps(arguments or {}, ensure_ascii=False)
+        found.append({"id": f"text_{len(found)}", "name": name, "arguments": encoded})
+    return found
+
+
+def wants_lookup(text: str) -> bool:
+    for match in _INTENT.finditer(text or ""):
+        window = (text or "")[max(0, match.start() - 20) : match.start()].lower()
+        if re.search(r"\b(not|don't|dont|won't|wont|without)\b", window):
+            continue
+        return True
+    return False
+
+
+def _last_user_text(messages: list[dict[str, Any]]) -> str:
+    for item in reversed(messages):
+        if item.get("role") != "user":
+            continue
+        content = item.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()[:300]
+    return ""
+
+
 def run_tool(client: WebClient, name: str, arguments: dict[str, Any]) -> str:
     if name == "web_search":
         results = client.search(str(arguments.get("query") or ""))
-        return json.dumps({"results": results}, ensure_ascii=False)[:4000]
+        payload: dict[str, Any] = {"results": results}
+        if client.last_error and not results:
+            payload["error"] = client.last_error
+        return json.dumps(payload, ensure_ascii=False)[:4000]
     if name == "fetch_page":
         page = client.fetch_page(str(arguments.get("url") or ""))
         return json.dumps({"url": page.get("url"), "title": page.get("title"), "text": page.get("text")}, ensure_ascii=False)[:4000]
@@ -138,6 +194,7 @@ def _openai_tools(
     working = list(messages)
     url = join_url(_openai_root(provider), "chat/completions")
     timeout = 300 if provider.get("kind") == "xai" else 120
+    looked_up = False
     for _round in range(_MAX_ROUNDS):
         if cancel.is_set():
             return
@@ -148,8 +205,24 @@ def _openai_tools(
             "tools": tools,
             token_field: _max_tokens(provider),
         }
-        text, calls = yield from _stream_openai(provider, url, body, timeout, cancel)
+        text, calls, reasoning = yield from _stream_openai(provider, url, body, timeout, cancel, emit=False)
         if not calls:
+            calls = text_tool_calls(text) + text_tool_calls(reasoning)
+        if not calls and not looked_up and wants_lookup(f"{text}\n{reasoning}"):
+            looked_up = True
+            query = _last_user_text(working)
+            result = execute("web_search", {"query": query})
+            working.append(
+                {
+                    "role": "user",
+                    "content": "Web lookup results. Answer from these excerpts and cite the URLs:\n" + result,
+                }
+            )
+            continue
+        if not calls:
+            visible = _without_tool_tags(text)
+            if visible:
+                yield visible
             return
         working.append(
             {
@@ -174,15 +247,39 @@ def _openai_tools(
     yield from _stream_openai(provider, url, body, timeout, cancel)
 
 
+def _without_tool_tags(text: str) -> str:
+    cleaned = _TOOL_TAG.sub("", text or "")
+    return cleaned.strip()
+
+
+def _absorb_tool(calls: dict[int, dict[str, str]], tool: dict[str, Any]) -> None:
+    index = int(tool.get("index") or 0)
+    slot = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+    if tool.get("id"):
+        slot["id"] = str(tool["id"])
+    function = tool.get("function") or {}
+    if not isinstance(function, dict):
+        return
+    if function.get("name"):
+        slot["name"] += str(function["name"])
+    arguments = function.get("arguments")
+    if isinstance(arguments, dict):
+        slot["arguments"] = json.dumps(arguments, ensure_ascii=False)
+    elif arguments:
+        slot["arguments"] += str(arguments)
+
+
 def _stream_openai(
     provider: dict[str, Any],
     url: str,
     body: dict[str, Any],
     timeout: float,
     cancel: threading.Event,
+    emit: bool = True,
 ) -> Iterator[str]:
     calls: dict[int, dict[str, str]] = {}
     text_parts: list[str] = []
+    reasoning_parts: list[str] = []
     try:
         lines = iter_lines(
             "POST",
@@ -198,37 +295,36 @@ def _stream_openai(
             error = event.get("error")
             if error:
                 message = error.get("message") if isinstance(error, dict) else error
-                if "tool" in str(message).lower():
+                if "tool" in str(message).lower() or "function" in str(message).lower():
                     raise ToolsUnsupported(str(message))
                 raise HttpError(400, str(message)[:400])
             choices = event.get("choices") or []
             if not choices or not isinstance(choices[0], dict):
                 continue
-            delta = choices[0].get("delta") or {}
+            choice = choices[0]
+            delta = choice.get("delta") or {}
+            message = choice.get("message") or {}
             if not isinstance(delta, dict):
-                continue
-            content = delta.get("content")
-            if isinstance(content, str) and content:
-                text_parts.append(content)
-                yield content
-            for tool in delta.get("tool_calls") or []:
-                if not isinstance(tool, dict):
-                    continue
-                index = int(tool.get("index") or 0)
-                slot = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
-                if tool.get("id"):
-                    slot["id"] = str(tool["id"])
-                function = tool.get("function") or {}
-                if isinstance(function, dict):
-                    if function.get("name"):
-                        slot["name"] += str(function["name"])
-                    if function.get("arguments"):
-                        slot["arguments"] += str(function["arguments"])
+                delta = {}
+            if not isinstance(message, dict):
+                message = {}
+            for source in (delta, message):
+                content = source.get("content")
+                if isinstance(content, str) and content:
+                    text_parts.append(content)
+                    if emit:
+                        yield content
+                reasoning = source.get("reasoning_content") or source.get("reasoning")
+                if isinstance(reasoning, str) and reasoning:
+                    reasoning_parts.append(reasoning)
+                for tool in source.get("tool_calls") or []:
+                    if isinstance(tool, dict):
+                        _absorb_tool(calls, tool)
     except HttpError as exc:
         if exc.status == 400 and not text_parts:
             raise ToolsUnsupported(str(exc)) from exc
         raise
-    return "".join(text_parts), [calls[index] for index in sorted(calls)]
+    return "".join(text_parts), [calls[index] for index in sorted(calls)], "".join(reasoning_parts)
 
 
 def _anthropic_tools(

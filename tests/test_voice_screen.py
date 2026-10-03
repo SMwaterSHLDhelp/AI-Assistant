@@ -352,6 +352,32 @@ def test_unsafe_piper_archive_is_rejected(tmp_path) -> None:
         safe_extract(str(archive), str(tmp_path / "out"))
 
 
+def test_piper_library_symlinks_extract_and_escapes_do_not(tmp_path) -> None:
+    archive = tmp_path / "piper.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        payload = tmp_path / "lib.so.1"
+        payload.write_bytes(b"lib")
+        tar.add(payload, arcname="piper/libpiper_phonemize.so.1")
+        link = tarfile.TarInfo("piper/libpiper_phonemize.so")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "libpiper_phonemize.so.1"
+        tar.addfile(link)
+    out = tmp_path / "out"
+    safe_extract(str(archive), str(out))
+    extracted = out / "piper" / "libpiper_phonemize.so"
+    assert extracted.is_symlink()
+    assert os.readlink(extracted) == "libpiper_phonemize.so.1"
+
+    escape = tmp_path / "escape.tar.gz"
+    with tarfile.open(escape, "w:gz") as tar:
+        info = tarfile.TarInfo("piper/escape")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "../../etc/passwd"
+        tar.addfile(info)
+    with pytest.raises(ValueError, match="not safe"):
+        safe_extract(str(escape), str(tmp_path / "nope"))
+
+
 def test_idle_unload_closes_a_resident_model(tmp_path) -> None:
     engine = VoiceEngine(AssistantService(str(tmp_path / "settings"), str(tmp_path / "runtime")).store)
     resident = FakeProc(["kitten"])

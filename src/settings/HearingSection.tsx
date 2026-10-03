@@ -91,6 +91,9 @@ export function HearingSection({
       <DeckRow layout="below" onClick={() => void save({ ptt_enabled: !hearing.ptt_enabled })}>
         {hearing.ptt_enabled ? "Push to talk: on" : "Push to talk: off"}
       </DeckRow>
+      <DeckRow layout="below" onClick={() => void save({ done_sound: hearing.done_sound === false })}>
+        {hearing.done_sound === false ? "Sound when done listening: off" : "Sound when done listening: on"}
+      </DeckRow>
       {hearing.install_message ? (
         <PanelSectionRow>
           <div>

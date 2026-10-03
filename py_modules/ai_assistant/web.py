@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import http.client
 import ipaddress
@@ -33,6 +34,10 @@ MAX_PAGE_BYTES = 400_000
 MAX_TEXT = 3500
 MAX_RESULTS = 6
 MAX_REDIRECTS = 3
+BROWSER_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+)
 
 Fetch = Callable[..., tuple[int, bytes]]
 Sleep = Callable[[float], None]
@@ -149,6 +154,12 @@ def fetch_url(
                 if not chunk:
                     break
                 raw += chunk
+            encoding = (response.getheader("Content-Encoding") or "").lower()
+            if "gzip" in encoding or raw[:2] == b"\x1f\x8b":
+                try:
+                    raw = gzip.decompress(raw)
+                except (OSError, EOFError, gzip.BadGzipFile):
+                    pass
             return status, raw
         finally:
             conn.close()
@@ -214,11 +225,11 @@ class _DuckParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {key: value or "" for key, value in attrs}
         classes = values.get("class", "")
-        if tag == "a" and "result__a" in classes:
+        if tag == "a" and ("result__a" in classes or "result-link" in classes):
             self._flush()
             self._href = values.get("href", "")
             self._mode = "title"
-        elif "result__snippet" in classes:
+        elif "result__snippet" in classes or "result-snippet" in classes:
             self._mode = "snippet"
 
     def handle_endtag(self, tag: str) -> None:
@@ -308,12 +319,14 @@ class WebClient:
         self.sources: list[dict[str, str]] = []
         self._seen: dict[str, float] = {}
         self.enabled = bool(self.settings["enabled"])
+        self.last_error = ""
 
     def search(self, query: str, now: float | None = None) -> list[dict[str, str]]:
         text = " ".join(str(query or "").split())[:300]
         if not text or not self.enabled:
             return []
         stamp = time.time() if now is None else now
+        self.last_error = ""
         cached = self._read_cache("search", self._search_key(text), stamp)
         if isinstance(cached, list):
             results = [item for item in cached if isinstance(item, dict)]
@@ -321,7 +334,8 @@ class WebClient:
             return results
         try:
             results = self._search_live(text)
-        except Exception:
+        except Exception as exc:
+            self.last_error = " ".join(str(exc).split())[:300]
             return []
         results = prefer_game_sources(results)[:MAX_RESULTS]
         cleaned = [
@@ -329,8 +343,9 @@ class WebClient:
             for item in results
             if str(item.get("url") or "").startswith("http")
         ]
-        self._write_cache("search", self._search_key(text), cleaned, stamp)
-        self._remember(cleaned)
+        if cleaned:
+            self._write_cache("search", self._search_key(text), cleaned, stamp)
+            self._remember(cleaned)
         return cleaned
 
     def fetch_page(self, url: str, now: float | None = None) -> dict[str, str]:
@@ -343,7 +358,7 @@ class WebClient:
             self._remember([cached])
             return {"url": target, "title": str(cached.get("title") or ""), "text": str(cached.get("text") or "")}
         try:
-            final, body = self._get_public(target, PAGE_TIMEOUT, MAX_PAGE_BYTES)
+            final, _status, body = self._get_public(target, PAGE_TIMEOUT, MAX_PAGE_BYTES)
         except Exception as exc:
             return {"url": target, "title": "", "text": str(exc)[:200]}
         if not self._robots_allow(final):
@@ -361,9 +376,10 @@ class WebClient:
             return ""
         name = _clip(game, 120)
         ask = _clip(question, 180)
-        if not name or not ask:
+        if not ask and not name:
             return ""
-        results = self.search(f"{name} {ask}", now=now)
+        query = f"{name} {ask}".strip()
+        results = self.search(query, now=now)
         if not results:
             return ""
         lines = ["Web lookup (short excerpts):"]
@@ -391,16 +407,57 @@ class WebClient:
         return self._duckduckgo(query)
 
     def _duckduckgo(self, query: str) -> list[dict[str, str]]:
-        url = "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
-        _status, body = self._get_public(url, SEARCH_TIMEOUT, MAX_PAGE_BYTES)
-        return parse_duckduckgo(body.decode("utf-8", "replace"))
+        form = urllib.parse.urlencode({"q": query, "kl": "us-en"}).encode("utf-8")
+        headers = {
+            "User-Agent": BROWSER_UA,
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": "https://html.duckduckgo.com/",
+        }
+        errors: list[str] = []
+        query_string = urllib.parse.urlencode({"q": query})
+        attempts: tuple[tuple[str, str, bytes | None], ...] = (
+            ("POST", "https://html.duckduckgo.com/html/", form),
+            ("GET", "https://html.duckduckgo.com/html/?" + query_string, None),
+            ("POST", "https://lite.duckduckgo.com/lite/", form),
+            ("GET", "https://lite.duckduckgo.com/lite/?" + query_string, None),
+        )
+        for method, url, payload in attempts:
+            try:
+                _url, status, body = self._get_public(
+                    url,
+                    SEARCH_TIMEOUT,
+                    MAX_PAGE_BYTES,
+                    headers=headers,
+                    body=payload,
+                    method=method,
+                )
+            except Exception as exc:
+                errors.append(" ".join(str(exc).split())[:180])
+                continue
+            if status == 202 or status >= 400:
+                errors.append(f"DuckDuckGo returned HTTP {status}")
+                continue
+            page = body.decode("utf-8", "replace")
+            results = parse_duckduckgo(page)
+            if results:
+                return results
+            lowered = page.lower()
+            if "anomaly" in lowered or "captcha" in lowered or "unfortunately, bots" in lowered:
+                errors.append("DuckDuckGo asked for a browser check")
+            else:
+                errors.append("DuckDuckGo returned no results")
+        if errors:
+            raise ValueError(errors[-1])
+        return []
 
     def _searxng(self, query: str) -> list[dict[str, str]]:
         base = self.settings["searxng_url"].rstrip("/")
         if not base:
             raise ValueError("Add a SearXNG URL in settings")
         url = base + "/search?" + urllib.parse.urlencode({"q": query, "format": "json", "categories": "general"})
-        _status, body = self._get_public(url, SEARCH_TIMEOUT, MAX_PAGE_BYTES)
+        _url, _status, body = self._get_public(url, SEARCH_TIMEOUT, MAX_PAGE_BYTES)
         payload = json.loads(body.decode("utf-8", "replace") or "{}")
         found = []
         for item in payload.get("results") or []:
@@ -413,7 +470,7 @@ class WebClient:
         if not key:
             raise ValueError("Add a Brave API key in settings")
         url = "https://api.search.brave.com/res/v1/web/search?" + urllib.parse.urlencode({"q": query, "count": MAX_RESULTS})
-        _status, body = self._get_public(url, SEARCH_TIMEOUT, MAX_PAGE_BYTES, headers={"X-Subscription-Token": key})
+        _url, _status, body = self._get_public(url, SEARCH_TIMEOUT, MAX_PAGE_BYTES, headers={"X-Subscription-Token": key})
         payload = json.loads(body.decode("utf-8", "replace") or "{}")
         rows = ((payload.get("web") or {}).get("results") or []) if isinstance(payload, dict) else []
         return [
@@ -427,7 +484,7 @@ class WebClient:
         if not key:
             raise ValueError("Add a Tavily API key in settings")
         payload = json.dumps({"api_key": key, "query": query, "max_results": MAX_RESULTS}).encode("utf-8")
-        _status, body = self._get_public(
+        _url, _status, body = self._get_public(
             "https://api.tavily.com/search",
             SEARCH_TIMEOUT,
             MAX_PAGE_BYTES,
@@ -447,7 +504,7 @@ class WebClient:
         if not key:
             raise ValueError("Add a Serper API key in settings")
         payload = json.dumps({"q": query, "num": MAX_RESULTS}).encode("utf-8")
-        _status, body = self._get_public(
+        _url, _status, body = self._get_public(
             "https://google.serper.dev/search",
             SEARCH_TIMEOUT,
             MAX_PAGE_BYTES,
@@ -478,7 +535,7 @@ class WebClient:
         status, raw = self.fetch(url, timeout, max_bytes, headers=headers, body=body, method=method)
         if status >= 400:
             raise ValueError(f"The site returned HTTP {status}")
-        return url, raw
+        return url, status, raw
 
     def _pace(self, host: str) -> None:
         now = self.clock()

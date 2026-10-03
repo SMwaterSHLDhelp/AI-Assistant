@@ -13,6 +13,7 @@ import {
   saveWeb,
   subscribeFailures,
   testProvider,
+  testWeb,
   writeDiagnostics,
 } from "../api";
 import { PROVIDER_KINDS, kindInfo } from "../catalog";
@@ -72,6 +73,8 @@ export function SettingsPage({ layout = "stack" }: { layout?: "stack" | "tabs" }
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [privacyOpen, setPrivacyOpen] = useState(false);
+  const [webTest, setWebTest] = useState("");
+  const [webTesting, setWebTesting] = useState(false);
 
   const report = (message: string) => {
     setError(message);
@@ -501,6 +504,33 @@ export function SettingsPage({ layout = "stack" }: { layout?: "stack" | "tabs" }
             <DeckRow layout="below" onClick={openSearch}>
               Edit search setup
             </DeckRow>
+          ) : null}
+          <DeckRow
+            layout="below"
+            onClick={() => {
+              if (webTesting) {
+                return;
+              }
+              setWebTesting(true);
+              setWebTest("Searching…");
+              void testWeb("Elden Ring Malenia weakness").then((result) => {
+                setWebTesting(false);
+                if (!result.ok) {
+                  setWebTest(result.error || "Web lookup failed");
+                  return;
+                }
+                const lines = (result.results || []).map((item) => `${item.title || item.url}\n${item.url}`);
+                const excerpt = result.excerpt ? `\n\n${result.excerpt}` : "";
+                setWebTest(lines.length ? `${lines.join("\n\n")}${excerpt}` : "No results.");
+              });
+            }}
+          >
+            {webTesting ? "Testing web lookup…" : "Test web lookup"}
+          </DeckRow>
+          {webTest ? (
+            <PanelSectionRow>
+              <div style={{ whiteSpace: "pre-wrap" }}>{webTest}</div>
+            </PanelSectionRow>
           ) : null}
         </>
       ) : null}

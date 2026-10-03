@@ -6,6 +6,17 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [Unreleased]
 
+## [0.1.0-rc.15] - 2026-10-03
+
+### Fixed
+
+- Spoken replies play. Piper's Linux archive contains library symlinks (`libpiper_phonemize.so` and the rest). The extractor treated every symlink as unsafe, so install stopped with "Archive path is not safe" and nothing was spoken. In-tree links are kept. A link that points outside the plugin folder is still rejected. Playback uses the deck user's PipeWire session (`XDG_RUNTIME_DIR`, `PULSE_SERVER`, `PIPEWIRE_RUNTIME_DIR`) via paplay, pw-cat, pw-play, or aplay, and switches to the deck user when Decky is root. Piper gets its own library directory on `LD_LIBRARY_PATH`.
+- Web lookup runs when the model decides to search. llama.cpp streams `tool_calls` in pieces, and Qwen also writes `<tool_call>` in the reply or in `reasoning_content`. Those calls are collected and executed. If the model says it will look something up and never emits a call, Deckling searches and asks again with the excerpts. DuckDuckGo is queried with a browser POST to the HTML endpoint, then a GET if that returns HTTP 202, then lite.duckduckgo.com. A failed search is not cached, and the error is returned to the model. Privacy and Web has Test web lookup, which shows titles, URLs, a short excerpt, or the error.
+
+### Added
+
+- A lower, descending tone plays when listening stops (end of speech, silence, or push-to-talk release), on the same path as the wake-word ding. Voice settings include Sound when done listening, on by default.
+
 ## [0.1.0-rc.14] - 2026-10-03
 
 ### Fixed

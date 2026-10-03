@@ -24,7 +24,7 @@ from .screen import capture_screen, decode_supplied_image
 from .store import Store, normalize_voice, public_provider, public_session_summary
 from .vision import DEFAULT_QUESTION, jarvis_prompt, model_can_see, vision_ids
 from .voice import VoiceEngine
-from .web import WebClient, public_web
+from .web import WebClient, normalize_web, public_web
 from .web_chat import TOOL_KINDS, ToolsUnsupported, iter_with_tools
 
 EVENT = "deckling_event"
@@ -417,6 +417,25 @@ class AssistantService:
         if not isinstance(settings, dict):
             raise ValueError("Web lookup settings must be an object")
         return {"ok": True, "web": self.store.update_web(settings)}
+
+    async def test_web(self, query: str = "") -> dict[str, Any]:
+        return await asyncio.to_thread(self._test_web, query)
+
+    def _test_web(self, query: str) -> dict[str, Any]:
+        text = " ".join(str(query or "Elden Ring Malenia weakness").split())[:300]
+        config = self.store.load_config()
+        web = normalize_web(config.get("web"))
+        if not web["enabled"]:
+            return {"ok": False, "error": "Web lookup is off.", "query": text, "results": []}
+        client = WebClient(os.path.join(self.store.runtime_dir, "web-cache"), web)
+        results = client.search(text)
+        excerpt = ""
+        if results:
+            page = client.fetch_page(str(results[0].get("url") or ""))
+            excerpt = " ".join(str(page.get("text") or "").split())[:500]
+        if client.last_error and not results:
+            return {"ok": False, "error": client.last_error, "query": text, "results": []}
+        return {"ok": True, "query": text, "results": results, "excerpt": excerpt, "error": client.last_error}
 
     def save_hearing(self, settings: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(settings, dict):
@@ -855,7 +874,7 @@ class AssistantService:
                         except ToolsUnsupported:
                             if streamed:
                                 return
-                    if web_client.enabled and game_name:
+                    if web_client.enabled and (game_name or question):
                         _status("searching")
                         block = web_client.auto(game_name, question)
                         _status("idle")

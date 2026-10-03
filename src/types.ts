@@ -75,6 +75,7 @@ export interface HearingSettings {
   ptt_enabled: boolean;
   battery_saver: boolean;
   debug_audio: boolean;
+  done_sound: boolean;
   wake_error: string;
   stt_backend: string;
   install_message: string;
@@ -94,6 +95,7 @@ export function defaultHearing(): HearingSettings {
     ptt_enabled: true,
     battery_saver: false,
     debug_audio: false,
+    done_sound: true,
     wake_error: "",
     stt_backend: "",
     install_message: "",

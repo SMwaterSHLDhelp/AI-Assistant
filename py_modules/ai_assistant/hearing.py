@@ -30,7 +30,7 @@ from .runtime_python import ensure_runtime_python, ensure_voice_venv
 from .store import Store, normalize_hearing
 from .vad import MAX_MS, NO_SPEECH_MS, RATE, THRESHOLD, rms, speech_region
 from .vision import wants_screen_look
-from .voice import player_command, safe_extract
+from .voice import playback_command, safe_extract
 
 WAKE_RELEASE = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
 WAKE_MODELS = (
@@ -162,6 +162,7 @@ def capture_utterance(settings_dir: str, runtime_dir: str, python: str) -> dict[
         engine._chime()
         engine._set_phase("recording", "Hearing you")
         pcm = engine._record()
+        engine._done_chime()
         if not pcm:
             return {"ok": True, "text": "", "empty": True}
         engine._set_phase("transcribing", "Transcribing")
@@ -232,6 +233,19 @@ def beep_pcm(rate: int = RATE, ms: int = 140, freq: int = 880) -> bytes:
     for index in range(count):
         fade = math.sin(math.pi * index / max(1, count))
         samples.append(int(fade * 0.25 * 32767 * math.sin(2 * math.pi * freq * index / rate)))
+    return samples.tobytes()
+
+
+def done_pcm(rate: int = RATE, ms: int = 220) -> bytes:
+    """A short descending tone, distinct from the wake-word ding."""
+    count = rate * ms // 1000
+    samples = array.array("h")
+    phase = 0.0
+    for index in range(count):
+        fade = math.sin(math.pi * index / max(1, count))
+        freq = 740 - (420 * index / max(1, count))
+        phase += 2 * math.pi * freq / rate
+        samples.append(int(fade * 0.25 * 32767 * math.sin(phase)))
     return samples.tobytes()
 
 
@@ -488,6 +502,7 @@ class HearingEngine:
             self._chime()
             self._set_phase("recording", "Hearing you")
             pcm = self._record()
+            self._done_chime()
             self._finish_pcm(pcm)
         except Exception as exc:  # noqa: BLE001
             self._set_phase("error", str(exc)[:300])
@@ -503,6 +518,7 @@ class HearingEngine:
             self.notify({"type": "hearing", "phase": "heard", "message": "Listening"})
             self._set_phase("recording", "Hearing you")
             pcm = self._record()
+            self._done_chime()
             self._finish_pcm(pcm)
         finally:
             self._busy = False
@@ -727,23 +743,28 @@ class HearingEngine:
         return completed.stdout.strip()
 
     def _chime(self) -> None:
-        try:
-            argv = player_command(RATE, self.which)
-        except RuntimeError:
-            self.notify({"type": "hearing", "phase": "toast", "message": "Listening"})
+        self._play_pcm(beep_pcm())
+        self.notify({"type": "hearing", "phase": "toast", "message": "Listening"})
+
+    def _done_chime(self) -> None:
+        if not self.public().get("done_sound", True):
             return
-        env = deck_audio_env(os.geteuid())
-        if os.geteuid() == 0 and self.which("runuser"):
-            argv = ["runuser", "-u", "deck", "--preserve-environment", "--", *argv]
+        self._play_pcm(done_pcm())
+        self.notify({"type": "hearing", "phase": "toast", "message": "Thinking"})
+
+    def _play_pcm(self, pcm: bytes) -> None:
+        try:
+            argv, env = playback_command(RATE, self.which)
+        except RuntimeError:
+            return
         proc = self.popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
         try:
             if proc.stdin is not None:
-                proc.stdin.write(beep_pcm())
+                proc.stdin.write(pcm)
                 proc.stdin.close()
             proc.wait(timeout=2)
         except Exception:
             _kill(proc)
-        self.notify({"type": "hearing", "phase": "toast", "message": "Listening"})
 
     def _model_path(self, model_id: str) -> str:
         match = next(item for item in WAKE_MODELS if item["id"] == model_id)

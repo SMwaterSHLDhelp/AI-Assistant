@@ -141,6 +141,14 @@ export const saveContext = deckyCall<
   OkResult & { context?: ContextSettings; game?: NowPlaying | null; suggestions?: string[] }
 >("save_context");
 export const saveWeb = deckyCall<[settings: Record<string, unknown>], OkResult & { web?: WebSettings }>("save_web");
+export const testWeb = deckyCall<
+  [query?: string],
+  OkResult & {
+    query?: string;
+    results?: { title: string; url: string; snippet?: string }[];
+    excerpt?: string;
+  }
+>("test_web");
 export const saveHearing = deckyCall<[settings: Partial<HearingSettings>], OkResult & { hearing?: HearingSettings }>(
   "save_hearing",
 );

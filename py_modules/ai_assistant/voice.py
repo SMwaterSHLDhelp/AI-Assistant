@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .audio_in import deck_audio_env
 from .http_util import USER_AGENT
 from .store import Store, normalize_voice
 
@@ -101,10 +102,15 @@ def public_voice(config: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def audio_environment(base: dict[str, str] | None = None) -> dict[str, str]:
-    env = {key: str(value) for key, value in (base or os.environ).items()}
-    runtime = env.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-    env["XDG_RUNTIME_DIR"] = runtime
-    env["PULSE_SERVER"] = f"unix:{runtime}/pulse/native"
+    """PipeWire and Pulse for the deck user, including when the plugin runs as root."""
+    if base is None:
+        env = deck_audio_env()
+    else:
+        env = {key: str(value) for key, value in base.items() if key != "LD_LIBRARY_PATH"}
+        runtime = env.get("XDG_RUNTIME_DIR") or "/run/user/1000"
+        env["XDG_RUNTIME_DIR"] = runtime
+        env["PULSE_SERVER"] = f"unix:{runtime}/pulse/native"
+    env["PIPEWIRE_RUNTIME_DIR"] = env.get("XDG_RUNTIME_DIR") or "/run/user/1000"
     return env
 
 
@@ -120,32 +126,62 @@ def player_command(rate: int, which: Which) -> list[str]:
     if which("paplay"):
         return ["paplay", "--raw", f"--rate={rate}", "--format=s16le", "--channels=1"]
     if which("pw-cat"):
-        return ["pw-cat", "-p", "--format", "s16", "--rate", str(rate), "--channels", "1"]
+        return ["pw-cat", "-p", "--format", "s16", "--rate", str(rate), "--channels", "1", "-"]
     if which("pw-play"):
         return ["pw-play", "--raw", f"--rate={rate}", "--format=s16le", "--channels=1"]
-    raise RuntimeError("Could not find paplay or pw-play for this Deck's PipeWire session.")
+    if which("aplay"):
+        return ["aplay", "-q", "-t", "raw", "-f", "S16_LE", "-r", str(rate), "-c", "1"]
+    raise RuntimeError("Could not find paplay, pw-play, or aplay for this Deck's PipeWire session.")
+
+
+def playback_command(rate: int, which: Which, euid: int | None = None) -> tuple[list[str], dict[str, str]]:
+    """Play raw s16le audio in the deck user's PipeWire session."""
+    env = audio_environment()
+    argv = player_command(rate, which)
+    current = os.geteuid() if euid is None else euid
+    if current == 0:
+        if not which("runuser"):
+            raise RuntimeError("Deckling is running as root and cannot play audio as the deck user.")
+        argv = ["runuser", "-u", "deck", "--preserve-environment", "--", *argv]
+    return argv, env
 
 
 def safe_extract(archive: str, dest: str) -> None:
+    """Unpack a voice archive. In-tree symlinks (Piper's shared libraries) are kept."""
     root = os.path.realpath(dest)
     os.makedirs(root, exist_ok=True)
     with tarfile.open(archive, "r:gz") as tar:
-        for member in tar.getmembers():
+        members = tar.getmembers()
+        for member in members:
             _reject_unsafe_member(member, root)
-            try:
-                tar.extract(member, root, filter="data")
-            except TypeError:
-                tar.extract(member, root)
+        try:
+            tar.extractall(root, members=members, filter="tar")
+        except TypeError:
+            tar.extractall(root, members=members)
+
+
+def _inside(root: str, path: str) -> bool:
+    root_real = os.path.realpath(root)
+    return path == root_real or path.startswith(root_real + os.sep)
 
 
 def _reject_unsafe_member(member: tarfile.TarInfo, root: str) -> None:
     name = member.name
     if not name or name.startswith("/") or name.startswith("\\") or ".." in Path(name).parts:
         raise ValueError("Archive path is not safe")
-    target = os.path.realpath(os.path.join(root, name))
-    if target != root and not target.startswith(root + os.sep):
+    if not _inside(root, os.path.normpath(os.path.join(root, name))):
         raise ValueError("Archive path is not safe")
-    if member.issym() or member.islnk():
+    if not (member.issym() or member.islnk()):
+        return
+    link = member.linkname or ""
+    if not link or os.path.isabs(link):
+        raise ValueError("Archive path is not safe")
+    if member.islnk():
+        if ".." in Path(link).parts or not _inside(root, os.path.normpath(os.path.join(root, link))):
+            raise ValueError("Archive path is not safe")
+        return
+    parent = os.path.normpath(os.path.join(root, os.path.dirname(name)))
+    if not _inside(root, os.path.normpath(os.path.join(parent, link))):
         raise ValueError("Archive path is not safe")
 
 
@@ -269,8 +305,10 @@ class VoiceEngine:
         speed = float(settings["voice_speed"])
         length_scale = f"{1.0 / speed:.3f}"
         env = audio_environment()
+        lib_dir = os.path.dirname(binary)
+        env["LD_LIBRARY_PATH"] = lib_dir
         command = [binary, "--model", model_path, "--output-raw", "--length-scale", length_scale]
-        player = player_command(rate, self.which)
+        player, play_env = playback_command(rate, self.which)
         piper = self.popen(
             command,
             stdin=subprocess.PIPE,
@@ -278,7 +316,7 @@ class VoiceEngine:
             env=env,
             start_new_session=True,
         )
-        play = self.popen(player, stdin=piper.stdout, env=env, start_new_session=True)
+        play = self.popen(player, stdin=piper.stdout, env=play_env, start_new_session=True)
         with self._lock:
             self._procs = [piper, play]
         if piper.stdout is not None:
@@ -311,9 +349,9 @@ class VoiceEngine:
             proc.stdin.write((payload + "\n").encode("utf-8"))
             proc.stdin.flush()
         rate = 24000
-        player = player_command(rate, self.which)
+        player, play_env = playback_command(rate, self.which)
         # The worker writes a length prefix plus s16le audio. Tests inject popen and do not need the bytes.
-        play = self.popen(player, stdin=subprocess.PIPE, env=env, start_new_session=True)
+        play = self.popen(player, stdin=subprocess.PIPE, env=play_env, start_new_session=True)
         with self._lock:
             self._procs = [proc, play]
             self._resident = proc

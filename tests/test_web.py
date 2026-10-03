@@ -227,3 +227,79 @@ def test_tool_call_uses_mocked_search_and_records_the_source(tmp_path, monkeypat
     assert sources[0]["url"].startswith("https://www.pcgamingwiki.com/")
     assert any(item.get("type") == "web" and item.get("phase") == "searching" for item in host_events)
     assert "sk-test" not in json.dumps(host_events)
+
+
+def test_qwen_tool_tag_and_spoken_intent_both_search(tmp_path, monkeypatch) -> None:
+    from ai_assistant.web_chat import iter_with_tools, text_tool_calls, wants_lookup
+
+    assert text_tool_calls('<tool_call>{"name":"web_search","arguments":{"query":"Malenia"}}</tool_call>')[0]["name"] == "web_search"
+    assert wants_lookup("I'll look it up.")
+    assert not wants_lookup("I will not look it up.")
+
+    def fetch(url, timeout, max_bytes, headers=None, body=None, method="GET"):  # noqa: ARG001
+        if "duckduckgo" in url:
+            assert method == "POST"
+            return 200, DDG
+        return 200, PAGE
+
+    monkeypatch.setattr("ai_assistant.web.fetch_url", fetch)
+    seen: list[dict] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(length))
+            seen.append(payload)
+            messages = payload.get("messages") or []
+            fed = any("Web lookup results" in str(item.get("content") or "") for item in messages)
+            if fed or any(item.get("role") == "tool" for item in messages):
+                raw = b'data: {"choices":[{"delta":{"content":"Scarlet rot."}}]}\n\ndata: [DONE]\n\n'
+            elif len(seen) == 1:
+                call = json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "content": (
+                                        '<tool_call>{"name": "web_search", '
+                                        '"arguments": {"query": "Malenia weakness"}}</tool_call>'
+                                    )
+                                }
+                            }
+                        ]
+                    }
+                ).encode()
+                raw = (
+                    b'data: {"choices":[{"delta":{"reasoning_content":"I should look it up.","content":null}}]}\n\n'
+                    b"data: " + call + b"\n\n"
+                    b"data: [DONE]\n\n"
+                )
+            else:
+                raw = b'data: {"choices":[{"delta":{"content":"I will look it up."}}]}\n\ndata: [DONE]\n\n'
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, fmt: str, *args: object) -> None:
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    provider = {
+        "kind": "llamacpp",
+        "base_url": f"http://127.0.0.1:{server.server_address[1]}",
+        "api_key": "",
+    }
+    try:
+        from ai_assistant.web import WebClient
+
+        client = WebClient(str(tmp_path), fetch=fetch, sleep=lambda _seconds: None)
+        text = "".join(
+            iter_with_tools(provider, [{"role": "user", "content": "Malenia weakness"}], "qwen", threading.Event(), client)
+        )
+    finally:
+        server.shutdown()
+    assert text == "Scarlet rot."
+    assert client.sources and "pcgamingwiki" in client.sources[0]["url"]

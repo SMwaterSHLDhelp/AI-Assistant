@@ -103,6 +103,7 @@ def normalize_hearing(raw: Any) -> dict[str, Any]:
         "ptt_enabled": True,
         "battery_saver": False,
         "debug_audio": False,
+        "done_sound": True,
         "wake_error": "",
         "stt_backend": "",
         "install_message": "",
@@ -116,6 +117,7 @@ def normalize_hearing(raw: Any) -> dict[str, Any]:
     hearing["ptt_enabled"] = bool(hearing["ptt_enabled"])
     hearing["battery_saver"] = bool(hearing["battery_saver"])
     hearing["debug_audio"] = bool(hearing["debug_audio"])
+    hearing["done_sound"] = bool(hearing["done_sound"])
     try:
         sensitivity = float(hearing["sensitivity"])
     except (TypeError, ValueError):

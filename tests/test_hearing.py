@@ -319,6 +319,7 @@ def test_service_commands_and_activity_do_not_start_a_download(tmp_path) -> None
     saved = service.save_hearing({"wake_enabled": True, "sensitivity": 0.2, "battery_saver": True})
     assert saved["ok"] is True
     assert saved["hearing"]["wake_model"] == "hey_jarvis"
+    assert saved["hearing"]["done_sound"] is True
     assert service.hearing._thread is None
     service.hearing._phase = "listening"
     paused = service.set_hearing_activity(True, False)
