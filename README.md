@@ -225,7 +225,10 @@ Open **Deckling** in the Quick Access Menu.
 - Replies stream in as the backend emits Decky events.
 - **Ask about the current game** reads the running game's name from Steam (`Router.MainRunningApp`) and includes it in that message. The button stays disabled when nothing is running. An empty message with that button asks for a short spoiler-free tip.
 - **Copy** uses Steam's clipboard when it is available.
-- **Clear chat** deletes the current conversation on the Deck. **New chat** starts another one. Older conversations stay in the conversation picker (up to 30).
+- **New chat** starts another conversation for the game that is running, or a General chat when nothing is running. Opening the menu while a game is running switches to that game's most recent chat.
+- **Chats** lists the current game first, then other games, then General. Each row shows the name, a preview of the last message, and when it was updated. Open, rename, pin, move to another game, or delete. Rename uses its own text field so the Steam keyboard stays on that field. A new chat is named from the first question. You can rename it afterward.
+- The last provider and model used in a chat are restored when you open it again. **Remember model per chat** in Advanced turns that off. **Keep chats** is 20, 40, or 80. Pinned chats are kept when older ones are removed. Each chat is a separate file under the plugin data directory, mode `0600`. Chats from an older install are copied into that layout on first start.
+- **Clear chat** deletes the messages in the current conversation. **Summarize** summarizes the chat that is open. Game context and web lookup follow the game that is running, on whichever chat is open.
 - Only one reply streams at a time. **Stop** cancels it. **Stop** also stops a spoken reply.
 
 Each request also includes the system prompt from settings, if you set one. The model sees the latest 40 messages.

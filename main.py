@@ -70,6 +70,18 @@ class Plugin:
     async def delete_session(self, session_id: str) -> dict:
         return self._call(self.service.delete_session, session_id)
 
+    async def rename_session(self, session_id: str, title: str) -> dict:
+        return self._call(self.service.rename_session, session_id, title)
+
+    async def pin_session(self, session_id: str, pinned: bool) -> dict:
+        return self._call(self.service.pin_session, session_id, pinned)
+
+    async def move_session(self, session_id: str, game_key: str, game_label: str) -> dict:
+        return self._call(self.service.move_session, session_id, game_key, game_label)
+
+    async def save_chats(self, settings: dict) -> dict:
+        return self._call(self.service.save_chats, settings)
+
     async def test_provider(self, provider_id: str) -> dict:
         return await self._acall(self.service.test_provider, provider_id)
 

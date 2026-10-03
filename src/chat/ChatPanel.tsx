@@ -24,7 +24,6 @@ import {
   setHearingActivity,
   stopListening,
   stopSpeaking,
-  switchSession,
 } from "../api";
 import { fieldValue } from "../form";
 import { nextStep } from "../hints";
@@ -36,7 +35,8 @@ import { errorMessage, sleep, withRetry } from "../retry";
 import { bindScreenChord, prepareScreenCapture, trySteamScreenshot, wantsScreenLook } from "../screenHelp";
 import { copyText, newRequestId, runningGameName } from "../steam";
 import type { AppState, BackendEvent, ChatMessage } from "../types";
-import { defaultContext, defaultHearing, defaultVoice, defaultWeb } from "../types";
+import { defaultChats, defaultContext, defaultHearing, defaultVoice, defaultWeb } from "../types";
+import { ChatList, type SessionResult } from "./ChatList";
 import type { NowPlaying } from "../types";
 import { readLiveGame } from "../gameContext";
 
@@ -55,6 +55,7 @@ const emptyState = (): AppState => ({
   game: null,
   suggestions: [],
   web: defaultWeb(),
+  chats: defaultChats(),
 });
 
 export function ChatPanel() {
@@ -216,6 +217,7 @@ export function ChatPanel() {
               game: loaded.game || null,
               suggestions: loaded.suggestions || [],
               web: { ...defaultWeb(), ...(loaded.web || {}) },
+              chats: { ...defaultChats(), ...(loaded.chats || {}) },
             });
             const initial = loaded.default_provider_id || loaded.providers[0]?.id || "";
             setProviderId(initial);
@@ -236,6 +238,7 @@ export function ChatPanel() {
               game: loaded.game ?? prev.game,
               suggestions: loaded.suggestions || prev.suggestions,
               web: { ...defaultWeb(), ...(loaded.web || prev.web) },
+              chats: { ...defaultChats(), ...(loaded.chats || prev.chats) },
             }));
           }
         } catch (err) {
@@ -305,7 +308,10 @@ export function ChatPanel() {
       if (!snapshot.name) {
         setState((prev) => ({ ...prev, game: null, suggestions: [] }));
         try {
-          await setGameContext({ ...snapshot });
+          const result = await setGameContext({ ...snapshot });
+          if (!cancelled && result.focused && result.current_session_id && !requestRef.current) {
+            applyOpened(result);
+          }
         } catch {
           // The card is already clear. The next poll retries the backend.
         }
@@ -333,7 +339,11 @@ export function ChatPanel() {
             game: result.game === undefined ? local : result.game,
             suggestions: result.suggestions || [],
             context: result.context ? { ...defaultContext(), ...result.context } : prev.context,
+            sessions: result.sessions || prev.sessions,
           }));
+          if (result.focused && result.current_session_id && !requestRef.current) {
+            applyOpened(result);
+          }
           return;
         }
       } catch {
@@ -560,44 +570,38 @@ export function ChatPanel() {
     handle.close = () => opened.Close();
   };
 
+  const applyOpened = (result: SessionResult) => {
+    if (!result.ok || !result.messages || !result.current_session_id) {
+      setError(result.error || "Could not open that conversation");
+      return;
+    }
+    setState((prev) => ({
+      ...prev,
+      current_session_id: result.current_session_id || prev.current_session_id,
+      messages: result.messages || [],
+      sessions: result.sessions || prev.sessions,
+    }));
+    if (result.remember_model !== false) {
+      if (result.provider_id) {
+        setProviderId(result.provider_id);
+      }
+      if (result.model) {
+        setModel(result.model);
+      }
+    }
+  };
+
   const openChats = () => {
     const handle = { close: () => undefined as void };
     const opened = showModal(
-      <ModalRoot onCancel={() => handle.close()}>
-        <PanelSection title="Chats">
-          {state.sessions.map((item) => (
-            <ButtonItem
-              key={item.id}
-              layout="below"
-              onClick={() => {
-                void (async () => {
-                  try {
-                    const result = await switchSession(item.id);
-                    if (!result.ok || !result.messages || !result.current_session_id) {
-                      setError(result.error || "Could not open that conversation");
-                      return;
-                    }
-                    setState((prev) => ({
-                      ...prev,
-                      current_session_id: result.current_session_id || prev.current_session_id,
-                      messages: result.messages || [],
-                      sessions: result.sessions || prev.sessions,
-                    }));
-                    handle.close();
-                  } catch (err) {
-                    setError(errorMessage(err, "Could not open that conversation"));
-                  }
-                })();
-              }}
-            >
-              {state.current_session_id === item.id ? `Open: ${item.title || "New chat"}` : item.title || "New chat"}
-            </ButtonItem>
-          ))}
-          <ButtonItem layout="below" onClick={() => handle.close()}>
-            Close
-          </ButtonItem>
-        </PanelSection>
-      </ModalRoot>,
+      <ChatList
+        sessions={state.sessions}
+        currentId={state.current_session_id}
+        activeKey={state.game?.game_key || "general"}
+        activeLabel={state.game?.game_label || state.game?.name || "General"}
+        onApply={applyOpened}
+        onClose={() => handle.close()}
+      />,
       window,
     );
     handle.close = () => opened.Close();
@@ -629,11 +633,9 @@ export function ChatPanel() {
             {`${currentProvider?.name || "Provider"} · ${model || "choose a model"}`}
           </ButtonItem>
         ) : null}
-        {state.sessions.length > 0 ? (
-          <ButtonItem layout="below" onClick={openChats}>
-            {state.sessions.find((item) => item.id === state.current_session_id)?.title || "Chats"}
-          </ButtonItem>
-        ) : null}
+        <ButtonItem layout="below" onClick={openChats}>
+          {state.sessions.find((item) => item.id === state.current_session_id)?.title || "Chats"}
+        </ButtonItem>
       </PanelSection>
 
       <PanelSection title="Chat">

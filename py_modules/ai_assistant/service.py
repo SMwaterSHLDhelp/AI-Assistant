@@ -12,6 +12,7 @@ from typing import Any, Protocol
 
 from . import claude_code, oauth, providers
 from .catalog import catalog_payload, get_kind
+from .chats import game_bucket, normalize_chats, sort_sessions
 from .claude_code import ClaudeCodeError
 from .game_context import enrich_store, format_block, normalize_context, prepare_snapshot, public_game, suggestions
 from .hearing import HearingEngine
@@ -77,6 +78,7 @@ def _state_error(
         "game": None,
         "suggestions": [],
         "web": public_web(None),
+        "chats": normalize_chats(None),
     }
 
 
@@ -181,6 +183,7 @@ class AssistantService:
             "game": public_game(self._game),
             "suggestions": suggestions(self._game) if self._game.get("name") else [],
             "web": public_web(config.get("web")),
+            "chats": normalize_chats(config.get("chats")),
         }
 
     def save_provider(self, incoming: dict[str, Any]) -> dict[str, Any]:
@@ -205,17 +208,36 @@ class AssistantService:
 
     def new_session(self) -> dict[str, Any]:
         self.voice.stop()
-        current = self.store.new_session()
-        return {"ok": True, "current_session_id": current["id"], "messages": [], **self._session_bits()}
+        key, label = game_bucket(self._game if self._game.get("name") else None)
+        current = self.store.new_session(key, label)
+        return {"ok": True, **self._open_session(current)}
 
     def switch_session(self, session_id: str) -> dict[str, Any]:
         current = self.store.switch_session(session_id)
-        return {
-            "ok": True,
-            "current_session_id": current["id"],
-            "messages": list(current.get("messages") or []),
-            **self._session_bits(),
-        }
+        return {"ok": True, **self._open_session(current)}
+
+    def rename_session(self, session_id: str, title: str) -> dict[str, Any]:
+        current = self.store.rename_session(session_id, title)
+        return {"ok": True, **self._open_session(self._current_or(current))}
+
+    def pin_session(self, session_id: str, pinned: bool) -> dict[str, Any]:
+        self.store.pin_session(session_id, pinned)
+        _data, current = self.store.ensure_session()
+        return {"ok": True, **self._open_session(current)}
+
+    def move_session(self, session_id: str, game_key: str, game_label: str) -> dict[str, Any]:
+        key = str(game_key or "general")[:120]
+        if key != "general" and not key.startswith(("app:", "rom:", "name:")):
+            raise ValueError("Pick a game from the list")
+        self.store.move_session(session_id, key, game_label)
+        _data, current = self.store.ensure_session()
+        return {"ok": True, **self._open_session(current)}
+
+    def save_chats(self, settings: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(settings, dict):
+            raise ValueError("Chat settings must be an object")
+        chats = self.store.update_chats(settings)
+        return {"ok": True, "chats": chats, **self._session_bits()}
 
     def clear_session(self) -> dict[str, Any]:
         self.voice.stop()
@@ -285,6 +307,7 @@ class AssistantService:
             return _fail("Type a message first")
         _, current = self.store.ensure_session()
         self.store.append_message(current["id"], "user", text)
+        self.store.remember_model(current["id"], provider_id, model)
         cancel = threading.Event()
         self._streams[request_id] = cancel
         task = asyncio.get_running_loop().create_task(
@@ -332,9 +355,23 @@ class AssistantService:
                 pass
         else:
             game = {}
+        previous_key, _previous_label = game_bucket(self._game if self._game.get("name") else None)
         self._game = game
         context = normalize_context(self.store.load_config().get("context"))
-        return {"ok": True, "context": context, "game": public_game(self._game), "suggestions": self._suggestions()}
+        key, label = game_bucket(self._game if self._game.get("name") else None)
+        payload: dict[str, Any] = {
+            "ok": True,
+            "context": context,
+            "game": public_game(self._game),
+            "suggestions": self._suggestions(),
+            "focused": False,
+            **self._session_bits(),
+        }
+        if key != previous_key and not self._streams:
+            focused = self.store.focus_game(key, label)
+            payload["focused"] = True
+            payload.update(self._open_session(focused["session"]))
+        return payload
 
     def _suggestions(self) -> list[str]:
         if not self._game.get("name"):
@@ -594,7 +631,26 @@ class AssistantService:
 
     def _session_bits(self) -> dict[str, Any]:
         data = self.store.load_sessions()
-        return {"sessions": [public_session_summary(item) for item in data["sessions"]]}
+        key, _label = game_bucket(self._game if self._game.get("name") else None)
+        ordered = sort_sessions(data["sessions"], key)
+        return {"sessions": [public_session_summary(item) for item in ordered]}
+
+    def _open_session(self, current: dict[str, Any]) -> dict[str, Any]:
+        chats = normalize_chats(self.store.load_config().get("chats"))
+        return {
+            "current_session_id": current["id"],
+            "messages": list(current.get("messages") or []),
+            "provider_id": current.get("provider_id") or "",
+            "model": current.get("model") or "",
+            "remember_model": chats["remember_model"],
+            **self._session_bits(),
+        }
+
+    def _current_or(self, fallback: dict[str, Any]) -> dict[str, Any]:
+        _data, current = self.store.ensure_session()
+        if current.get("id") == fallback.get("id"):
+            return fallback
+        return current
 
     def _public_oauth(self, provider_id: str) -> dict[str, Any]:
         raw = dict(self._oauth.get(provider_id) or {"status": "idle", "message": ""})

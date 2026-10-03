@@ -11,6 +11,7 @@ import uuid
 from typing import Any
 
 from .catalog import get_kind
+from .chats import chat_title, normalize_chats, preview_text, prune_sessions
 from .game_context import normalize_context
 from .web import normalize_web, public_web
 
@@ -165,16 +166,45 @@ class Store:
 
     def load_sessions(self) -> dict[str, Any]:
         with self._lock:
-            data = _read_json(self.sessions_path, _blank_sessions())
-            data.setdefault("sessions", [])
-            data.setdefault("current_id", "")
-            return data
+            self._migrate_legacy_sessions()
+            index = _read_json(self.sessions_path, _blank_sessions())
+            index.setdefault("sessions", [])
+            index.setdefault("current_id", "")
+            full: list[dict[str, Any]] = []
+            for meta in index["sessions"]:
+                if not isinstance(meta, dict) or not meta.get("id"):
+                    continue
+                record = _session_meta(meta)
+                record["messages"] = self._read_chat_messages(str(meta["id"]))
+                full.append(record)
+            return {"current_id": index.get("current_id") or "", "sessions": full}
 
     def save_sessions(self, data: dict[str, Any]) -> None:
         with self._lock:
-            sessions = data.get("sessions") or []
-            data["sessions"] = sessions[:_MAX_SESSIONS]
-            _atomic_write(self.sessions_path, data)
+            keep = normalize_chats(self.load_config().get("chats"))["keep"]
+            current_id = str(data.get("current_id") or "")
+            sessions = [item for item in (data.get("sessions") or []) if isinstance(item, dict) and item.get("id")]
+            sessions = prune_sessions(sessions, keep, current_id)
+            directory = self._chats_dir()
+            os.makedirs(directory, exist_ok=True)
+            os.chmod(directory, 0o700)
+            slim: list[dict[str, Any]] = []
+            kept: set[str] = set()
+            for item in sessions:
+                session_id = str(item["id"])
+                kept.add(session_id)
+                self._write_chat_messages(session_id, list(item.get("messages") or []))
+                slim.append(_session_meta(item))
+            for name in os.listdir(directory):
+                if not name.endswith(".json"):
+                    continue
+                session_id = name[:-5]
+                if session_id not in kept:
+                    try:
+                        os.remove(os.path.join(directory, name))
+                    except OSError:
+                        pass
+            _atomic_write(self.sessions_path, {"version": 2, "current_id": current_id, "sessions": slim})
 
     def delete_private_files(self) -> None:
         with self._lock:
@@ -183,6 +213,13 @@ class Store:
                     os.remove(path)
                 except FileNotFoundError:
                     pass
+            directory = self._chats_dir()
+            if os.path.isdir(directory):
+                for name in os.listdir(directory):
+                    try:
+                        os.remove(os.path.join(directory, name))
+                    except OSError:
+                        pass
 
     def upsert_provider(self, incoming: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(incoming, dict):
@@ -315,6 +352,23 @@ class Store:
             self.save_config(config)
             return context
 
+    def update_chats(self, patch: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(patch, dict):
+            raise ValueError("Chat settings must be an object")
+        with self._lock:
+            config = self.load_config()
+            chats = normalize_chats(config.get("chats"))
+            if "keep" in patch:
+                chats["keep"] = patch["keep"]
+            if "remember_model" in patch:
+                chats["remember_model"] = patch["remember_model"]
+            chats = normalize_chats(chats)
+            config["chats"] = chats
+            self.save_config(config)
+            data = self.load_sessions()
+            self.save_sessions(data)
+            return chats
+
     def update_web(self, patch: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(patch, dict):
             raise ValueError("Web lookup settings must be an object")
@@ -383,18 +437,35 @@ class Store:
             current = _new_session()
             sessions.insert(0, current)
             data["current_id"] = current["id"]
-            data["sessions"] = sessions[:_MAX_SESSIONS]
+            data["sessions"] = sessions
             self.save_sessions(data)
         return data, current
 
-    def new_session(self) -> dict[str, Any]:
+    def new_session(self, game_key: str = "general", game_label: str = "General") -> dict[str, Any]:
         with self._lock:
             data = self.load_sessions()
-            current = _new_session()
-            data["sessions"] = [current, *data["sessions"]][:_MAX_SESSIONS]
+            current = _new_session(game_key, game_label)
+            data["sessions"] = [current, *data["sessions"]]
             data["current_id"] = current["id"]
             self.save_sessions(data)
             return current
+
+    def focus_game(self, game_key: str, game_label: str) -> dict[str, Any]:
+        """Open the newest chat for this game, or create one. Same game keeps the chat that is open."""
+        with self._lock:
+            data = self.load_sessions()
+            current = next((item for item in data["sessions"] if item.get("id") == data.get("current_id")), None)
+            if current is not None and str(current.get("game_key") or "general") == game_key:
+                return {"switched": False, "session": current}
+            matches = [item for item in data["sessions"] if str(item.get("game_key") or "general") == game_key]
+            if not matches:
+                created = self.new_session(game_key, game_label)
+                return {"switched": True, "session": created}
+            matches.sort(key=lambda item: int(item.get("updated_at") or 0), reverse=True)
+            chosen = matches[0]
+            data["current_id"] = chosen["id"]
+            self.save_sessions(data)
+            return {"switched": True, "session": chosen}
 
     def switch_session(self, session_id: str) -> dict[str, Any]:
         with self._lock:
@@ -406,6 +477,53 @@ class Store:
             self.save_sessions(data)
             return match
 
+    def rename_session(self, session_id: str, title: str) -> dict[str, Any]:
+        with self._lock:
+            data = self.load_sessions()
+            match = next((item for item in data["sessions"] if item.get("id") == session_id), None)
+            if match is None:
+                raise ValueError("That conversation no longer exists")
+            match["title"] = chat_title(title)[:60]
+            match["renamed"] = True
+            match["updated_at"] = int(time.time())
+            self.save_sessions(data)
+            return match
+
+    def pin_session(self, session_id: str, pinned: bool) -> dict[str, Any]:
+        with self._lock:
+            data = self.load_sessions()
+            match = next((item for item in data["sessions"] if item.get("id") == session_id), None)
+            if match is None:
+                raise ValueError("That conversation no longer exists")
+            match["pinned"] = bool(pinned)
+            self.save_sessions(data)
+            return match
+
+    def move_session(self, session_id: str, game_key: str, game_label: str) -> dict[str, Any]:
+        with self._lock:
+            data = self.load_sessions()
+            match = next((item for item in data["sessions"] if item.get("id") == session_id), None)
+            if match is None:
+                raise ValueError("That conversation no longer exists")
+            key = str(game_key or "general")[:120]
+            label = " ".join(str(game_label or "").split())[:80] or "General"
+            match["game_key"] = key
+            match["game_label"] = label
+            self.save_sessions(data)
+            return match
+
+    def remember_model(self, session_id: str, provider_id: str, model: str) -> None:
+        if not normalize_chats(self.load_config().get("chats"))["remember_model"]:
+            return
+        with self._lock:
+            data = self.load_sessions()
+            match = next((item for item in data["sessions"] if item.get("id") == session_id), None)
+            if match is None:
+                return
+            match["provider_id"] = str(provider_id or "")[:80]
+            match["model"] = str(model or "")[:120]
+            self.save_sessions(data)
+
     def clear_session(self, session_id: str | None = None) -> dict[str, Any]:
         with self._lock:
             data, current = self.ensure_session()
@@ -414,6 +532,8 @@ class Store:
                 if item.get("id") == target_id:
                     item["messages"] = []
                     item["title"] = "New chat"
+                    item["renamed"] = False
+                    item["preview"] = ""
                     item["updated_at"] = int(time.time())
                     item.pop("claude_session_id", None)
                     self.save_sessions(data)
@@ -465,9 +585,9 @@ class Store:
             messages.append(message)
             match["messages"] = messages[-_MAX_MESSAGES:]
             match["updated_at"] = message["created_at"]
-            if role == "user" and (not match.get("title") or match.get("title") == "New chat"):
-                title = " ".join(text.split())
-                match["title"] = (title[:48] + "…") if len(title) > 48 else title or "New chat"
+            match["preview"] = preview_text(match["messages"])
+            if role == "user" and not match.get("renamed") and (not match.get("title") or match.get("title") == "New chat"):
+                match["title"] = chat_title(text)
             self.save_sessions(data)
             return message
 
@@ -483,6 +603,58 @@ class Store:
                 raise ValueError("That provider no longer exists")
             self.save_config(config)
 
+    def _chats_dir(self) -> str:
+        return os.path.join(self.runtime_dir, "chats")
+
+    def _chat_path(self, session_id: str) -> str:
+        cleaned = str(session_id)
+        allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+        if not cleaned or len(cleaned) > 80 or any(character not in allowed for character in cleaned):
+            raise ValueError("Bad chat id")
+        return os.path.join(self._chats_dir(), cleaned + ".json")
+
+    def _migrate_legacy_sessions(self) -> None:
+        if not os.path.exists(self.sessions_path):
+            return
+        try:
+            with open(self.sessions_path, encoding="utf-8") as handle:
+                index = json.load(handle)
+        except (OSError, ValueError):
+            raise
+        if not isinstance(index, dict):
+            return
+        sessions = index.get("sessions") or []
+        if not any(isinstance(item, dict) and "messages" in item for item in sessions):
+            return
+        os.makedirs(self._chats_dir(), exist_ok=True)
+        os.chmod(self._chats_dir(), 0o700)
+        slim = []
+        for item in sessions:
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            self._write_chat_messages(str(item["id"]), list(item.get("messages") or []))
+            slim.append(_session_meta(item))
+        _atomic_write(
+            self.sessions_path,
+            {"version": 2, "current_id": index.get("current_id") or "", "sessions": slim},
+        )
+
+    def _read_chat_messages(self, session_id: str) -> list[dict[str, Any]]:
+        try:
+            path = self._chat_path(session_id)
+        except ValueError:
+            return []
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            return []
+        messages = data.get("messages") if isinstance(data, dict) else None
+        return list(messages) if isinstance(messages, list) else []
+
+    def _write_chat_messages(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+        _atomic_write(self._chat_path(session_id), {"messages": messages[-_MAX_MESSAGES:]})
+
     def set_claude_session(self, session_id: str, claude_session_id: str) -> None:
         cleaned = str(claude_session_id or "").strip()
         if not cleaned or len(cleaned) > 200 or any(character.isspace() for character in cleaned):
@@ -496,13 +668,44 @@ class Store:
                     return
 
 
-def _new_session() -> dict[str, Any]:
+def _new_session(game_key: str = "general", game_label: str = "General") -> dict[str, Any]:
+    label = " ".join(str(game_label or "").split())[:80] or "General"
     return {
         "id": uuid.uuid4().hex,
         "title": "New chat",
         "updated_at": int(time.time()),
         "messages": [],
+        "game_key": str(game_key or "general")[:120],
+        "game_label": label,
+        "pinned": False,
+        "renamed": False,
+        "preview": "",
+        "provider_id": "",
+        "model": "",
     }
+
+
+def _session_meta(item: dict[str, Any]) -> dict[str, Any]:
+    key = str(item.get("game_key") or "general")[:120]
+    label = " ".join(str(item.get("game_label") or "").split())[:80]
+    if not label:
+        label = "General" if key == "general" else "Game"
+    meta = {
+        "id": item.get("id") or "",
+        "title": str(item.get("title") or "New chat")[:80],
+        "updated_at": int(item.get("updated_at") or 0),
+        "game_key": key,
+        "game_label": label,
+        "pinned": bool(item.get("pinned")),
+        "renamed": bool(item.get("renamed")),
+        "preview": str(item.get("preview") or preview_text(list(item.get("messages") or [])))[:100],
+        "provider_id": str(item.get("provider_id") or "")[:80],
+        "model": str(item.get("model") or "")[:120],
+    }
+    claude_session = str(item.get("claude_session_id") or "").strip()
+    if claude_session:
+        meta["claude_session_id"] = claude_session[:200]
+    return meta
 
 
 def _connection_status(value: Any) -> str:
@@ -534,8 +737,15 @@ def public_provider(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def public_session_summary(record: dict[str, Any]) -> dict[str, Any]:
+    messages = list(record.get("messages") or [])
     return {
         "id": record.get("id") or "",
         "title": record.get("title") or "New chat",
         "updated_at": int(record.get("updated_at") or 0),
+        "game_key": record.get("game_key") or "general",
+        "game_label": record.get("game_label") or "General",
+        "pinned": bool(record.get("pinned")),
+        "preview": record.get("preview") or preview_text(messages),
+        "provider_id": record.get("provider_id") or "",
+        "model": record.get("model") or "",
     }

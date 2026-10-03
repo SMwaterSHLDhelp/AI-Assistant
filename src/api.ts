@@ -9,8 +9,20 @@ import type {
   ProviderInput,
   PublicProvider,
   SessionSummary,
+  ChatSettings,
   VoiceSettings,
 } from "./types";
+
+type SessionResult = OkResult & {
+  current_session_id?: string;
+  messages?: AppState["messages"];
+  sessions?: SessionSummary[];
+  provider_id?: string;
+  model?: string;
+  remember_model?: boolean;
+  focused?: boolean;
+  chats?: ChatSettings;
+};
 
 export const getState = callable<[], AppState & OkResult>("get_state");
 export const saveProvider = callable<[provider: ProviderInput], OkResult & { provider?: PublicProvider }>(
@@ -21,22 +33,16 @@ export const saveSettings = callable<
   [settings: { system_prompt: string; default_provider_id: string; default_model: string }],
   OkResult
 >("save_settings");
-export const newSession = callable<
-  [],
-  OkResult & { current_session_id?: string; messages?: AppState["messages"]; sessions?: SessionSummary[] }
->("new_session");
-export const switchSession = callable<
-  [sessionId: string],
-  OkResult & { current_session_id?: string; messages?: AppState["messages"]; sessions?: SessionSummary[] }
->("switch_session");
-export const clearSession = callable<
-  [],
-  OkResult & { current_session_id?: string; messages?: AppState["messages"]; sessions?: SessionSummary[] }
->("clear_session");
-export const deleteSession = callable<
-  [sessionId: string],
-  OkResult & { current_session_id?: string; messages?: AppState["messages"]; sessions?: SessionSummary[] }
->("delete_session");
+export const newSession = callable<[], SessionResult>("new_session");
+export const switchSession = callable<[sessionId: string], SessionResult>("switch_session");
+export const clearSession = callable<[], SessionResult>("clear_session");
+export const deleteSession = callable<[sessionId: string], SessionResult>("delete_session");
+export const renameSession = callable<[sessionId: string, title: string], SessionResult>("rename_session");
+export const pinSession = callable<[sessionId: string, pinned: boolean], SessionResult>("pin_session");
+export const moveSession = callable<[sessionId: string, gameKey: string, gameLabel: string], SessionResult>(
+  "move_session",
+);
+export const saveChats = callable<[settings: Partial<ChatSettings>], SessionResult>("save_chats");
 export const testProvider = callable<
   [providerId: string],
   OkResult & { message?: string; models?: string[]; vision_models?: string[] }
@@ -52,7 +58,7 @@ export const cancelChat = callable<[requestId: string], OkResult>("cancel_chat")
 export const saveVoice = callable<[settings: Partial<VoiceSettings>], OkResult & { voice?: VoiceSettings }>("save_voice");
 export const setGameContext = callable<
   [snapshot: Record<string, unknown>],
-  OkResult & { game?: NowPlaying | null; suggestions?: string[]; context?: ContextSettings }
+  SessionResult & { game?: NowPlaying | null; suggestions?: string[]; context?: ContextSettings }
 >("set_game_context");
 export const saveContext = callable<
   [settings: Partial<ContextSettings>],

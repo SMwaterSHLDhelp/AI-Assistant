@@ -11,6 +11,7 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+from .chats import game_bucket
 from .http_util import USER_AGENT
 
 STORE_URL = "https://store.steampowered.com/api/appdetails?appids={appid}&l=english"
@@ -236,6 +237,7 @@ def suggestions(game: dict[str, Any]) -> list[str]:
 def public_game(game: dict[str, Any]) -> dict[str, Any] | None:
     if not game.get("name"):
         return None
+    key, label = game_bucket(game)
     return {
         "appid": int(game.get("appid") or 0),
         "name": game.get("name") or "",
@@ -246,6 +248,8 @@ def public_game(game: dict[str, Any]) -> dict[str, Any] | None:
         "emulator": game.get("emulator") or "",
         "shortcut": bool(game.get("shortcut")),
         "sources": list(game.get("sources") or []),
+        "game_key": key,
+        "game_label": label,
     }
 
 

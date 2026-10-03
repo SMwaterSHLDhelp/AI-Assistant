@@ -37,6 +37,21 @@ export interface SessionSummary {
   id: string;
   title: string;
   updated_at: number;
+  game_key: string;
+  game_label: string;
+  pinned: boolean;
+  preview: string;
+  provider_id: string;
+  model: string;
+}
+
+export interface ChatSettings {
+  keep: number;
+  remember_model: boolean;
+}
+
+export function defaultChats(): ChatSettings {
+  return { keep: 40, remember_model: true };
 }
 
 export interface VoiceSettings {
@@ -128,6 +143,8 @@ export interface NowPlaying {
   emulator: string;
   shortcut: boolean;
   sources: string[];
+  game_key?: string;
+  game_label?: string;
 }
 
 export function defaultContext(): ContextSettings {
@@ -169,6 +186,7 @@ export interface AppState {
   game: NowPlaying | null;
   suggestions: string[];
   web: WebSettings;
+  chats: ChatSettings;
 }
 
 export interface ProviderInput {

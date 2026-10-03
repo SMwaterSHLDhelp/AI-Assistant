@@ -1,12 +1,12 @@
 import { ButtonItem, ModalRoot, Navigation, PanelSection, PanelSectionRow, TextField, showModal } from "@decky/ui";
 import { useEffect, useState } from "react";
-import { deleteProvider, getState, saveContext, saveSettings, saveVoice, saveWeb, testProvider } from "../api";
+import { deleteProvider, getState, saveChats, saveContext, saveSettings, saveVoice, saveWeb, testProvider } from "../api";
 import { PROVIDER_KINDS, kindInfo } from "../catalog";
 import { fieldValue } from "../form";
 import { FirstRun, PRESET_KEY, QUICK_PRESETS, presetBaseUrl } from "../onboarding";
 import { errorMessage, sleep, withRetry } from "../retry";
 import type { AppState, ContextSettings, OkResult, PublicProvider, WebSettings } from "../types";
-import { defaultContext, defaultHearing, defaultVoice, defaultWeb } from "../types";
+import { defaultChats, defaultContext, defaultHearing, defaultVoice, defaultWeb } from "../types";
 import { ProviderEditor, blankDraft, draftFromProvider, type Draft } from "./ProviderEditor";
 import { HearingSection } from "./HearingSection";
 import { VoiceSection } from "./VoiceSection";
@@ -35,6 +35,7 @@ const emptyState = (): AppState => ({
   game: null,
   suggestions: [],
   web: defaultWeb(),
+  chats: defaultChats(),
 });
 
 export function SettingsPage() {
@@ -65,6 +66,7 @@ export function SettingsPage() {
       game: loaded.game ?? prev.game,
       suggestions: loaded.suggestions ?? prev.suggestions,
       web: { ...defaultWeb(), ...(loaded.web || prev.web) },
+      chats: { ...defaultChats(), ...(loaded.chats || prev.chats) },
     }));
   };
 
@@ -387,6 +389,39 @@ export function SettingsPage() {
         </PanelSectionRow>
         <ButtonItem layout="below" onClick={openDefaults}>
           Edit defaults
+        </ButtonItem>
+        <ButtonItem
+          layout="below"
+          onClick={() => {
+            const next = state.chats.keep === 20 ? 40 : state.chats.keep === 40 ? 80 : 20;
+            void saveChats({ keep: next }).then((result) => {
+              if (!result.ok || !result.chats) {
+                report(result.error || "Could not save chat history");
+                return;
+              }
+              setState((prev) => ({
+                ...prev,
+                chats: { ...defaultChats(), ...result.chats },
+                sessions: result.sessions || prev.sessions,
+              }));
+            });
+          }}
+        >
+          {`Keep chats: ${state.chats.keep}`}
+        </ButtonItem>
+        <ButtonItem
+          layout="below"
+          onClick={() => {
+            void saveChats({ remember_model: !state.chats.remember_model }).then((result) => {
+              if (!result.ok || !result.chats) {
+                report(result.error || "Could not save chat history");
+                return;
+              }
+              setState((prev) => ({ ...prev, chats: { ...defaultChats(), ...result.chats } }));
+            });
+          }}
+        >
+          {state.chats.remember_model ? "Remember model per chat: on" : "Remember model per chat: off"}
         </ButtonItem>
       </PanelSection>
     </div>

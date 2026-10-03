@@ -6,6 +6,14 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [Unreleased]
 
+## [0.1.0-rc.8] - 2026-10-03
+
+### Added
+
+- Chats are grouped by the running game. A Steam game uses its app id. A shortcut or ROM uses that title. When nothing is running, chats stay in General. Each game can have several chats.
+- Opening Quick Access while a game is running shows that game's most recent chat. New chat starts another one for the same game. The chat list shows the current game first, with a preview and the time it was updated. You can open, rename, pin, move, or delete a chat. New chats are named from the first question.
+- Each chat can remember the provider and model you used. Advanced has that switch, and a cap of 20, 40, or 80 chats. Older unpinned chats are removed. Existing conversations are migrated into one file per chat.
+
 ## [0.1.0-rc.7] - 2026-10-03
 
 ### Added
