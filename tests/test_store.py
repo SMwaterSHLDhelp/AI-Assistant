@@ -49,6 +49,21 @@ def test_rejects_non_http_urls(tmp_path) -> None:
         )
 
 
+def test_connection_status_is_kept_with_the_provider(tmp_path) -> None:
+    store = Store(str(tmp_path / "settings"), str(tmp_path / "runtime"))
+    created = store.upsert_provider({"kind": "ollama", "name": "Home", "base_url": "http://127.0.0.1:11434"})
+    assert public_provider(created)["connection_status"] == "unknown"
+    store.set_connection(created["id"], "nope", "ignored")
+    assert public_provider(store.get_provider(created["id"]))["connection_status"] == "unknown"
+    store.set_connection(created["id"], "error", "Connection refused")
+    saved = store.upsert_provider(
+        {"id": created["id"], "kind": "ollama", "name": "Home", "base_url": "http://127.0.0.1:11434"}
+    )
+    public = public_provider(saved)
+    assert public["connection_status"] == "error"
+    assert "refused" in public["connection_detail"]
+
+
 def test_session_round_trip(tmp_path) -> None:
     store = Store(str(tmp_path / "settings"), str(tmp_path / "runtime"))
     first = store.new_session()

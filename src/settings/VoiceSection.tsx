@@ -28,7 +28,7 @@ export function VoiceSection({
   const selected = voice.voice_engine === "kittentts" ? voice.kitten_voice : voice.piper_voice;
 
   return (
-    <PanelSection title="Voice">
+    <PanelSection title="Spoken replies">
       <PanelSectionRow>
         <div>Spoken replies stay off until you turn them on. The voice download waits for the first test or the first reply.</div>
       </PanelSectionRow>
@@ -67,12 +67,6 @@ export function VoiceSection({
       <ButtonItem layout="below" onClick={() => void test()}>
         Test voice
       </ButtonItem>
-      <ButtonItem layout="below" onClick={() => void save({ screen_capture: !voice.screen_capture })}>
-        {voice.screen_capture ? "Screen capture: on" : "Screen capture: off"}
-      </ButtonItem>
-      <PanelSectionRow>
-        <div>Screenshots are sent only to the provider you picked, and only when you ask about the screen. They are not saved unless you press Save screenshot.</div>
-      </PanelSectionRow>
     </PanelSection>
   );
 

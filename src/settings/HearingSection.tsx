@@ -23,7 +23,7 @@ export function HearingSection({
   const percent = Math.round(hearing.sensitivity * 100);
 
   return (
-    <PanelSection title="Listening">
+    <PanelSection title="Voice">
       <PanelSectionRow>
         <div>
           Wake word and speech recognition run on this Deck. Audio is not saved unless debug capture is on. Models

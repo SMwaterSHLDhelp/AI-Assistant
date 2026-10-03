@@ -168,8 +168,15 @@ try {
   await savePage.evaluateOnNewDocument(installBackend, "save");
   await savePage.goto(`file://${join(outDir, "index.html")}`, { waitUntil: "networkidle0" });
   await savePage.waitForFunction(() => document.body.innerText.includes("Add provider"), { timeout: 4000 });
+  await clickButton(savePage, "Edit defaults");
+  await savePage.waitForSelector('#deckling-modal input[aria-label="System prompt"]', { timeout: 4000 });
   await typeInto(savePage, "System prompt", "Stay with this field while I type a long prompt.");
   await typeInto(savePage, "Default model", "local-model-id-that-stays-focused");
+  const callsWhileDefaults = await savePage.evaluate(() => window.__calls || []);
+  if (callsWhileDefaults.includes("save_settings")) {
+    throw new Error(`Typing defaults saved early: ${callsWhileDefaults.join(",")}`);
+  }
+  await clickButton(savePage, "Cancel");
   await clickButton(savePage, "Add provider");
   await savePage.waitForSelector("#deckling-modal input[aria-label='Name']", { timeout: 4000 });
   await typeInto(savePage, "Name", "Home llama server");

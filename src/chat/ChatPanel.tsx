@@ -2,7 +2,7 @@ import { addEventListener, removeEventListener, toaster } from "@decky/api";
 import {
   ButtonItem,
   ConfirmModal,
-  DropdownItem,
+  ModalRoot,
   Navigation,
   PanelSection,
   PanelSectionRow,
@@ -25,7 +25,10 @@ import {
   stopSpeaking,
   switchSession,
 } from "../api";
-import { componentReady, fieldValue, optionData } from "../form";
+import { fieldValue } from "../form";
+import { nextStep } from "../hints";
+import { renderMarkdown } from "../markdown";
+import { FirstRun, PRESET_KEY } from "../onboarding";
 import { bindHearingChord, bindSleep } from "../hearing";
 import { ModelPicker } from "../ModelPicker";
 import { errorMessage, sleep, withRetry } from "../retry";
@@ -64,7 +67,9 @@ export function ChatPanel() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [speaking, setSpeaking] = useState(false);
   const requestRef = useRef<string | null>(null);
+  const streamSession = useRef("");
   const sessionRef = useRef("");
+  const bottomRef = useRef<HTMLDivElement>(null);
   const lookRef = useRef<(question?: string) => Promise<void>>(async () => {});
   const sleepingRef = useRef(false);
 
@@ -74,7 +79,12 @@ export function ChatPanel() {
 
   useEffect(() => {
     const listener = addEventListener<[BackendEvent]>("deckling_event", (event) => {
-      if (event.type === "chat_delta" && event.request_id === requestRef.current && event.text) {
+      if (
+        event.type === "chat_delta" &&
+        event.request_id === requestRef.current &&
+        event.text &&
+        (!streamSession.current || streamSession.current === sessionRef.current)
+      ) {
         const delta = event.text;
         const requestId = event.request_id;
         setState((prev) => {
@@ -126,8 +136,8 @@ export function ChatPanel() {
             },
           }));
         }
-        if (event.phase === "toast" && event.message) {
-          toaster.toast({ title: "Deckling", body: event.message, duration: 2000 });
+        if (event.phase === "error" && event.message) {
+          setError(nextStep(event.message));
         }
         if (event.phase === "sending" && event.request_id) {
           requestRef.current = event.request_id;
@@ -289,14 +299,9 @@ export function ChatPanel() {
     };
   }, [providerId, modelReload]);
 
-  const providerOptions = state.providers.map((item) => ({
-    label: item.name,
-    data: item.id,
-  }));
-  const sessionOptions = state.sessions.map((item) => ({
-    label: item.title || "New chat",
-    data: item.id,
-  }));
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: "nearest" });
+  }, [state.messages, streaming]);
 
   const look = async (question: string, nextModel?: string) => {
     if (streaming) {
@@ -346,27 +351,36 @@ export function ChatPanel() {
   };
   lookRef.current = (question?: string) => look(question ?? draft);
 
-  const send = async (aboutGame: string) => {
+  const send = async (aboutGame: string, text = draft) => {
     if (streaming) {
       return;
     }
-    if (wantsScreenLook(draft)) {
-      await look(draft);
+    if (wantsScreenLook(text)) {
+      await look(text);
       return;
     }
     if (!providerId) {
-      setError("Add a provider in settings first");
+      setError(nextStep("Add a provider in settings first"));
       return;
     }
     const requestId = newRequestId();
     requestRef.current = requestId;
+    streamSession.current = sessionRef.current;
     setStreaming(true);
     setError("");
-    const result = await sendMessage(providerId, model, draft, requestId, aboutGame);
+    let result;
+    try {
+      result = await sendMessage(providerId, model, text, requestId, aboutGame);
+    } catch (err) {
+      requestRef.current = null;
+      setStreaming(false);
+      setError(nextStep(errorMessage(err, "Could not send. Check the provider, then try again.")));
+      return;
+    }
     if (!result.ok) {
       requestRef.current = null;
       setStreaming(false);
-      setError(result.error || "Could not send");
+      setError(nextStep(result.error || "Could not send. Check the provider, then try again."));
       return;
     }
     setDraft("");
@@ -381,116 +395,86 @@ export function ChatPanel() {
 
   const stop = async () => {
     setSpeaking(false);
-    await stopSpeaking();
-    const requestId = requestRef.current;
-    if (requestId) {
-      await cancelChat(requestId);
+    try {
+      await stopSpeaking();
+      const requestId = requestRef.current;
+      if (requestId) {
+        await cancelChat(requestId);
+      }
+    } catch (err) {
+      setError(nextStep(errorMessage(err, "Could not stop. Try again.")));
     }
   };
 
-  const openSettings = () => {
+  const openSettings = (preset?: string) => {
+    if (preset) {
+      try {
+        sessionStorage.setItem(PRESET_KEY, preset);
+      } catch {
+        // The settings page still has the same presets.
+      }
+    }
     Navigation.Navigate("/deckling/settings");
     Navigation.CloseSideMenus();
   };
 
-  return (
-    <>
-      <PanelSection title="Deckling">
-        <PanelSectionRow>
-          <div>
-            {state.hearing.phase === "listening"
-              ? "Mic: listening for the wake word"
-              : state.hearing.phase === "recording"
-                ? "Mic: hearing you"
-                : state.hearing.phase === "transcribing"
-                  ? "Mic: transcribing"
-                  : state.hearing.phase === "paused"
-                    ? "Mic: paused"
-                    : "Mic: off"}
-          </div>
-        </PanelSectionRow>
-        {loading ? (
-          <PanelSectionRow>
-            <div>Loading…</div>
-          </PanelSectionRow>
-        ) : null}
-        {state.providers.length === 0 ? (
-          <PanelSectionRow>
-            <div>Add a provider to start chatting.</div>
-          </PanelSectionRow>
-        ) : (
-          <>
-            {componentReady(DropdownItem) ? (
-              <DropdownItem
-                label="Provider"
-                menuLabel="Provider"
-                childrenContainerWidth="min"
-                rgOptions={providerOptions}
-                selectedOption={
-                  providerOptions.some((item) => item.data === providerId) ? providerId : providerOptions[0]?.data
-                }
-                onChange={(option) => {
-                  const next = optionData(option);
-                  setProviderId(next);
-                  const match = state.providers.find((item) => item.id === next);
-                  setModel(match?.default_model || "");
-                }}
-              />
-            ) : (
-              state.providers.map((item) => (
-                <ButtonItem
-                  key={item.id}
-                  layout="below"
-                  onClick={() => {
-                    setProviderId(item.id);
-                    setModel(item.default_model || "");
-                  }}
-                >
-                  {providerId === item.id ? `Using ${item.name}` : item.name}
-                </ButtonItem>
-              ))
-            )}
-            <ModelPicker
-              label="Model id"
-              models={models}
-              value={model}
-              onChange={setModel}
-              onRefresh={() => setModelReload((value) => value + 1)}
-              loading={modelsLoading}
-              error={modelsError}
-              visionIds={visionModels}
-            />
-          </>
-        )}
-        {sessionOptions.length > 0 && componentReady(DropdownItem) ? (
-          <DropdownItem
-            label="Conversation"
-            menuLabel="Conversation"
-            childrenContainerWidth="min"
-            rgOptions={sessionOptions}
-            selectedOption={
-              sessionOptions.some((item) => item.data === state.current_session_id)
-                ? state.current_session_id
-                : sessionOptions[0]?.data
-            }
-            onChange={(option) => {
-              void (async () => {
-                const result = await switchSession(optionData(option));
-                if (!result.ok || !result.messages || !result.current_session_id) {
-                  setError(result.error || "Could not open that conversation");
-                  return;
-                }
-                setState((prev) => ({
-                  ...prev,
-                  current_session_id: result.current_session_id || prev.current_session_id,
-                  messages: result.messages || [],
-                  sessions: result.sessions || prev.sessions,
-                }));
-              })();
-            }}
+  const currentProvider = state.providers.find((item) => item.id === providerId);
+  const micLabel =
+    speaking
+      ? "Speaking"
+      : state.hearing.phase === "listening"
+        ? "Listening"
+        : state.hearing.phase === "recording"
+          ? "Hearing you"
+          : state.hearing.phase === "transcribing"
+            ? "Transcribing"
+            : state.hearing.phase === "paused"
+              ? "Paused"
+              : "Mic";
+
+  const openSwitcher = () => {
+    const handle = { close: () => undefined as void };
+    const opened = showModal(
+      <ModalRoot onCancel={() => handle.close()} bDisableBackgroundDismiss>
+        <PanelSection title="Provider and model">
+          {state.providers.map((item) => (
+            <ButtonItem
+              key={item.id}
+              layout="below"
+              onClick={() => {
+                setProviderId(item.id);
+                setModel(item.default_model || "");
+              }}
+            >
+              {providerId === item.id ? `Using ${item.name}` : item.name}
+            </ButtonItem>
+          ))}
+          <ModelPicker
+            label="Model"
+            models={models}
+            value={model}
+            onChange={setModel}
+            onRefresh={() => setModelReload((value) => value + 1)}
+            loading={modelsLoading}
+            error={modelsError}
+            visionIds={visionModels}
           />
-        ) : (
-          state.sessions.map((item) => (
+          <ButtonItem layout="below" onClick={() => handle.close()}>
+            Done
+          </ButtonItem>
+        </PanelSection>
+      </ModalRoot>,
+      window,
+    );
+    handle.close = () => opened.Close();
+  };
+
+  const openChats = () => {
+    const handle = { close: () => undefined as void };
+    const opened = showModal(
+      <ModalRoot onCancel={() => handle.close()}>
+        <PanelSection title="Chats">
+          {state.sessions.map((item) => (
             <ButtonItem
               key={item.id}
               layout="below"
@@ -508,37 +492,76 @@ export function ChatPanel() {
                       messages: result.messages || [],
                       sessions: result.sessions || prev.sessions,
                     }));
+                    handle.close();
                   } catch (err) {
-                    setError(err instanceof Error ? err.message : "Could not open that conversation");
+                    setError(errorMessage(err, "Could not open that conversation"));
                   }
                 })();
               }}
             >
               {state.current_session_id === item.id ? `Open: ${item.title || "New chat"}` : item.title || "New chat"}
             </ButtonItem>
-          ))
-        )}
-        <ButtonItem layout="below" onClick={() => void refreshSession(setState, setError, "new")}>
-          New chat
-        </ButtonItem>
-        <ButtonItem layout="below" onClick={openSettings}>
-          Provider settings
-        </ButtonItem>
+          ))}
+          <ButtonItem layout="below" onClick={() => handle.close()}>
+            Close
+          </ButtonItem>
+        </PanelSection>
+      </ModalRoot>,
+      window,
+    );
+    handle.close = () => opened.Close();
+  };
+
+  return (
+    <>
+      <style>{`
+        .deckling-bubble p { margin: 0 0 8px; }
+        .deckling-bubble ul { margin: 0 0 8px; padding-left: 18px; }
+        .deckling-bubble pre { margin: 0 0 8px; padding: 8px; overflow-x: auto; background: #0e141b; border-radius: 6px; }
+        .deckling-bubble code { font-size: 14px; }
+      `}</style>
+      <PanelSection title="Deckling">
+        <PanelSectionRow>
+          <div style={{ fontSize: "14px", opacity: 0.85 }}>A tiny companion in your menu.</div>
+        </PanelSectionRow>
+        {loading ? (
+          <PanelSectionRow>
+            <div>Loading…</div>
+          </PanelSectionRow>
+        ) : null}
+        {state.providers.length === 0 && !loading ? (
+          <FirstRun onPreset={(kind) => openSettings(kind)} onCustom={() => openSettings()} />
+        ) : null}
+        {state.providers.length > 0 ? (
+          <ButtonItem layout="below" onClick={openSwitcher}>
+            {`${currentProvider?.name || "Provider"} · ${model || "choose a model"}`}
+          </ButtonItem>
+        ) : null}
+        {state.sessions.length > 0 ? (
+          <ButtonItem layout="below" onClick={openChats}>
+            {state.sessions.find((item) => item.id === state.current_session_id)?.title || "Chats"}
+          </ButtonItem>
+        ) : null}
       </PanelSection>
 
       <PanelSection title="Chat">
         {state.messages.length === 0 ? (
           <PanelSectionRow>
-            <div>No messages yet. Type below, then press Send.</div>
+            <div style={{ fontSize: "16px" }}>
+              {state.providers.length === 0
+                ? "Add a provider and I'll be right here."
+                : "I'm here. Ask about the game, or tell me to look at the screen."}
+            </div>
           </PanelSectionRow>
         ) : (
           state.messages.map((message) => <MessageBubble key={message.id} message={message} />)
         )}
         {streaming ? (
           <PanelSectionRow>
-            <div>Streaming…</div>
+            <div style={{ fontSize: "16px" }}>Deckling is writing…</div>
           </PanelSectionRow>
         ) : null}
+        <div ref={bottomRef} />
         {error ? (
           <PanelSectionRow>
             <div style={{ color: "#f2b8b5", whiteSpace: "pre-wrap" }}>{error}</div>
@@ -549,11 +572,26 @@ export function ChatPanel() {
             {`Switch to ${id}`}
           </ButtonItem>
         ))}
+        <ButtonItem layout="below" onClick={() => void look(draft || "What am I looking at, and what should I do next?")}>
+          Look at my screen
+        </ButtonItem>
+        <ButtonItem layout="below" onClick={() => void refreshSession(setState, setError, "new")}>
+          New chat
+        </ButtonItem>
+        <ButtonItem layout="below" disabled={!providerId || streaming} onClick={() => void send("", "Summarize this conversation in a few sentences.")}>
+          Summarize
+        </ButtonItem>
       </PanelSection>
 
       <PanelSection title="Message">
+        {streaming ? (
+          <ButtonItem layout="below" onClick={() => void stop()}>
+            Stop generation
+          </ButtonItem>
+        ) : null}
         <PanelSectionRow>
           <TextField
+            key="chat-ask"
             label="Ask"
             description="Opens the on-screen keyboard"
             value={draft}
@@ -561,45 +599,31 @@ export function ChatPanel() {
             onChange={(event) => setDraft(fieldValue(event))}
           />
         </PanelSectionRow>
-        {streaming ? (
-          <ButtonItem layout="below" onClick={() => void stop()}>
-            Stop
-          </ButtonItem>
-        ) : (
+        {streaming ? null : (
           <ButtonItem layout="below" disabled={!providerId} onClick={() => void send("")}>
             Send
           </ButtonItem>
         )}
-        <ButtonItem
-          layout="below"
-          disabled={streaming || !game}
-          description={game ? `Playing ${game}` : "No game is running"}
-          onClick={() => void send(game)}
-        >
+        <ButtonItem layout="below" disabled={streaming || !game} description={game ? `Playing ${game}` : "No game is running"} onClick={() => void send(game)}>
           Ask about the current game
         </ButtonItem>
         <ButtonItem
           layout="below"
-          disabled={streaming || !providerId || !state.voice.screen_capture}
-          description={
-            state.voice.screen_capture
-              ? "Hides this menu, then asks about the screen. Steam + Y does this too when the controller API is available."
-              : "Screen capture is off"
-          }
-          onClick={() => void look(draft)}
+          disabled={streaming}
+          onClick={() => {
+            if (speaking) {
+              void stop();
+              return;
+            }
+            if (!state.hearing.ptt_enabled) {
+              setError("Push to talk is off. Turn it on under Voice in settings.");
+              return;
+            }
+            void pushToTalk().catch((err) => setError(errorMessage(err, "Could not use the microphone.")));
+          }}
         >
-          Look at my screen
+          {micLabel}
         </ButtonItem>
-        {state.hearing.ptt_enabled ? (
-          <ButtonItem
-            layout="below"
-            disabled={streaming}
-            description="Steam + X does this too when the controller API is available."
-            onClick={() => void pushToTalk()}
-          >
-            Push to talk
-          </ButtonItem>
-        ) : null}
         {state.hearing.wake_enabled ? (
           <ButtonItem
             layout="below"
@@ -614,22 +638,20 @@ export function ChatPanel() {
             Stop listening
           </ButtonItem>
         ) : null}
-        {speaking && !streaming ? (
-          <ButtonItem layout="below" onClick={() => void stop()}>
-            Stop speaking
-          </ButtonItem>
-        ) : null}
+        <ButtonItem layout="below" onClick={() => openSettings()}>
+          Provider settings
+        </ButtonItem>
         <ButtonItem
           layout="below"
           onClick={() => {
             void (async () => {
               const saved = await saveLastScreenshot();
               if (!saved.ok) {
-                setError(saved.error || "Nothing to save yet.");
+                setError(saved.error || "Nothing to save yet. Look at the screen first.");
                 return;
               }
               setError("");
-              toaster.toast({ title: "Deckling", body: "Saved the screenshot on this Deck.", duration: 3000 });
+              toaster.toast({ title: "Deckling", body: "Saved the screenshot on this Deck.", duration: 2000 });
             })();
           }}
         >
@@ -672,20 +694,25 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   return (
     <PanelSectionRow>
       <div
+        className="deckling-bubble"
         style={{
           width: "100%",
-          whiteSpace: "pre-wrap",
           wordBreak: "break-word",
-          padding: "6px 0",
+          padding: "8px 10px",
+          margin: "6px 0",
+          borderRadius: "8px",
+          fontSize: "16px",
+          lineHeight: 1.4,
+          background: mine ? "#1b3a4a" : "#15202b",
+          borderLeft: mine ? "3px solid #7fd1c3" : "3px solid #8b9bb4",
         }}
       >
-        <div style={{ opacity: 0.7, fontSize: "12px", marginBottom: "4px" }}>{mine ? "You" : "Deckling"}</div>
-        <div>{message.content}</div>
-        {!mine ? (
-          <ButtonItem layout="below" onClick={() => void copyText(message.content)}>
-            Copy
-          </ButtonItem>
-        ) : null}
+        <div style={{ opacity: 0.7, fontSize: "13px", marginBottom: "4px" }}>{mine ? "You" : "Deckling"}</div>
+        {mine ? (
+          <div style={{ whiteSpace: "pre-wrap" }}>{message.content}</div>
+        ) : (
+          <div dangerouslySetInnerHTML={{ __html: renderMarkdown(message.content) }} />
+        )}
       </div>
     </PanelSectionRow>
   );

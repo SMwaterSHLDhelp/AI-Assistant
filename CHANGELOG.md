@@ -6,6 +6,20 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [Unreleased]
 
+## [0.1.0-rc.6] - 2026-10-03
+
+### Changed
+
+- The Quick Access chat is a short column: the provider and model are one button, replies render lists and code, and Stop generation stays next to the message field while a reply is streaming. Look at my screen, New chat, and Summarize are chips. The microphone button shows listening, transcribing, and speaking.
+- Settings are grouped into Providers, Voice, Spoken replies, Screen help, Privacy, and Advanced. Provider text fields stay in a dialog. The first run offers Ollama, llama.cpp, OpenAI, Gemini, Grok, and Claude, then an optional voice step.
+- A failed connection is remembered on the provider card. Chat errors say what to try next.
+
+### Fixed
+
+- A reply that is still streaming no longer lands in a conversation you already switched away from.
+- Sending or stopping no longer leaves a failed request spinning when the backend call throws.
+- Default model and system prompt are edited in a dialog, so the Steam keyboard is not attached to the long settings page.
+
 ## [0.1.0-rc.5] - 2026-10-02
 
 ### Added

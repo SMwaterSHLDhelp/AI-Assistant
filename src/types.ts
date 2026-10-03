@@ -21,6 +21,8 @@ export interface PublicProvider {
   has_oauth_secret: boolean;
   oauth_connected: boolean;
   oauth_expires_at: number;
+  connection_status: string;
+  connection_detail: string;
 }
 
 export interface ChatMessage {

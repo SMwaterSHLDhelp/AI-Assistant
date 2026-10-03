@@ -8,11 +8,13 @@ The frontend uses the current Decky libraries: `@decky/ui` (the package that rep
 
 ## Screenshots
 
-Screenshots from a Steam Deck are not in the repo yet. They will replace this placeholder.
+These are headless renders at 1280×800 with the Decky controls mocked. A capture from a real Deck is still to come.
 
 | Quick Access chat | Provider settings |
 | --- | --- |
-| _Not captured yet. The panel has a provider and model picker, the conversation, Send, Stop, Ask about the current game, Look at my screen, Push to talk, Save screenshot, Copy, and Clear._ | _Not captured yet. The settings page adds providers, picks a model, and sets listening, voice, and screen capture._ |
+| ![Quick Access chat](docs/screenshots/after-chat.png) | ![Provider settings](docs/screenshots/after-settings.png) |
+
+The chat shows the provider and model on one button, the conversation, and Look at my screen, New chat, and Summarize. Settings groups Providers, Voice, Spoken replies, Screen help, Privacy, and Advanced. Text entry stays in a dialog.
 
 ## Install
 

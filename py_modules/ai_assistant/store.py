@@ -289,6 +289,16 @@ class Store:
             self.save_config(config)
             return voice
 
+    def set_connection(self, provider_id: str, status: str, detail: str) -> None:
+        with self._lock:
+            config = self.load_config()
+            for item in config["providers"]:
+                if item.get("id") == provider_id:
+                    item["connection_status"] = _connection_status(status)
+                    item["connection_detail"] = str(detail or "")[:300]
+                    self.save_config(config)
+                    return
+
     def update_hearing(self, patch: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(patch, dict):
             raise ValueError("Listening settings must be an object")
@@ -448,6 +458,11 @@ def _new_session() -> dict[str, Any]:
     }
 
 
+def _connection_status(value: Any) -> str:
+    status = str(value or "unknown")
+    return status if status in {"connected", "error", "unknown"} else "unknown"
+
+
 def public_provider(record: dict[str, Any]) -> dict[str, Any]:
     """Provider fields that are safe to send to the frontend."""
     api_key = str(record.get("api_key") or "")
@@ -466,6 +481,8 @@ def public_provider(record: dict[str, Any]) -> dict[str, Any]:
         "has_oauth_secret": bool(record.get("oauth_client_secret")),
         "oauth_connected": bool(record.get("oauth_access_token") or record.get("oauth_refresh_token")),
         "oauth_expires_at": int(record.get("oauth_expires_at") or 0),
+        "connection_status": _connection_status(record.get("connection_status")),
+        "connection_detail": str(record.get("connection_detail") or "")[:300],
     }
 
 

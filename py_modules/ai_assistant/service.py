@@ -197,13 +197,16 @@ class AssistantService:
             models = await asyncio.to_thread(providers.list_models, provider)
         except (HttpError, ValueError, OSError, ClaudeCodeError) as exc:
             self.host.warning("Connection test failed kind=%s", provider.get("kind"))
-            return _fail(str(exc))
+            message = str(exc)
+            self.store.set_connection(provider_id, "error", message)
+            return _fail(message)
         self.host.info("Connection test ok kind=%s models=%s", provider.get("kind"), len(models))
         preview = models[:50]
         if preview:
             message = f"Connected. {len(models)} model{'s' if len(models) != 1 else ''} available."
         else:
             message = "Connected, but the server did not list any models. You can still type a model id."
+        self.store.set_connection(provider_id, "connected", message)
         return {"ok": True, "message": message, "models": preview, "vision_models": vision_ids(preview)}
 
     async def list_models(self, provider_id: str) -> dict[str, Any]:
@@ -211,8 +214,11 @@ class AssistantService:
         try:
             models = await asyncio.to_thread(providers.list_models, provider)
         except (HttpError, ValueError, OSError, ClaudeCodeError) as exc:
+            self.store.set_connection(provider_id, "error", str(exc))
             return _fail(str(exc))
         shown = models[:80]
+        detail = f"Connected. {len(models)} model{'s' if len(models) != 1 else ''} available."
+        self.store.set_connection(provider_id, "connected", detail)
         return {"ok": True, "models": shown, "vision_models": vision_ids(shown)}
 
     def start_chat(
