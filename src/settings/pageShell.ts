@@ -28,72 +28,11 @@ export function looksLikeActionBar(text: string, className: string, height: numb
   return name.includes("footer") && !name.includes("dialog");
 }
 
-export function mountPageShell(root: HTMLElement): () => void {
-  const viewHeight = window.innerHeight || 0;
-  const touched: { el: HTMLElement; style: string | null }[] = [];
-  const remember = (el: HTMLElement) => {
-    touched.push({ el, style: el.getAttribute("style") });
-  };
-
-  const parent = root.parentElement;
-  const parentHeight = parent?.getBoundingClientRect().height ?? 0;
-  remember(root);
-  if (parentHeight > 0) {
-    root.style.position = "absolute";
-    root.style.top = "0";
-    root.style.right = "0";
-    root.style.bottom = "0";
-    root.style.left = "0";
-    root.style.overflow = "hidden";
-    root.style.boxSizing = "border-box";
-    root.style.paddingBottom = "64px";
-  }
-
-  let node = root.parentElement;
-  for (let depth = 0; node && node !== document.body && depth < 8; depth += 1) {
-    const rect = node.getBoundingClientRect();
-    if (isShortShell(rect.height, rect.bottom, viewHeight)) {
-      remember(node);
-      node.style.setProperty("height", `${viewHeight}px`, "important");
-      node.style.setProperty("min-height", `${viewHeight}px`, "important");
-      node.style.setProperty("overflow", "hidden", "important");
-    }
-    node = node.parentElement;
-  }
-
-  const footer = findActionBar();
-  if (footer) {
-    remember(footer);
-    footer.style.setProperty("position", "fixed", "important");
-    footer.style.setProperty("left", "0", "important");
-    footer.style.setProperty("right", "0", "important");
-    footer.style.setProperty("bottom", "0", "important");
-    footer.style.setProperty("top", "auto", "important");
-    footer.style.setProperty("transform", "none", "important");
-  }
-
-  return () => {
-    for (let index = touched.length - 1; index >= 0; index -= 1) {
-      const item = touched[index];
-      if (item.style === null) {
-        item.el.removeAttribute("style");
-      } else {
-        item.el.setAttribute("style", item.style);
-      }
-    }
-  };
-}
-
-function findActionBar(): HTMLElement | null {
-  const nodes = document.querySelectorAll("div, footer");
-  for (const node of nodes) {
-    if (!(node instanceof HTMLElement)) {
-      continue;
-    }
-    const rect = node.getBoundingClientRect();
-    if (looksLikeActionBar(node.textContent || "", node.className || "", rect.height, rect.width)) {
-      return node;
-    }
-  }
-  return null;
+/**
+ * Stretching ancestor shells and pinning a guessed footer covered the dialog
+ * Save button and other rows. Steam's SidebarNavigation already places the
+ * action bar. Do not rewrite those nodes.
+ */
+export function mountPageShell(_root: HTMLElement): () => void {
+  return () => undefined;
 }

@@ -9,7 +9,17 @@ function backend(): Call {
 }
 
 export function callable(name: string): (...args: unknown[]) => Promise<unknown> {
-  return (...args: unknown[]) => backend()(name, args);
+  return async (...args: unknown[]) => {
+    const value = await backend()(name, args);
+    if (value && typeof value === "object" && "success" in value && "result" in value) {
+      const packet = value as { success: boolean; result: unknown };
+      if (!packet.success) {
+        throw new Error(typeof packet.result === "string" ? packet.result : `${name} failed`);
+      }
+      return packet.result;
+    }
+    return value;
+  };
 }
 
 export const toaster = {

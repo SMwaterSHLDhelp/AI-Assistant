@@ -1,6 +1,7 @@
 import { addEventListener, removeEventListener } from "@decky/api";
-import { ButtonItem, DialogButton, Navigation, PanelSection, PanelSectionRow, TextField } from "@decky/ui";
-import { useEffect, useState } from "react";
+import { Navigation, PanelSection, PanelSectionRow, TextField } from "@decky/ui";
+import { useEffect, useRef, useState } from "react";
+import { DeckRow } from "../DeckRow";
 import {
   cancelOAuth,
   deleteProvider,
@@ -83,16 +84,22 @@ export function draftFromProvider(provider: PublicProvider): Draft {
  */
 export function ProviderEditor({
   initial,
+  typeLocked = false,
   onClose,
   onSaved,
   onError,
 }: {
   initial: Draft;
+  typeLocked?: boolean;
   onClose: () => void;
   onSaved: () => Promise<void>;
   onError: (message: string) => void;
 }) {
   const [draft, setDraft] = useState(initial);
+  const [showTypes, setShowTypes] = useState(!typeLocked);
+  const [more, setMore] = useState(!typeLocked);
+  const [signIn, setSignIn] = useState(false);
+  const saving = useRef(0);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -158,7 +165,6 @@ export function ProviderEditor({
           setModelsError(message);
           setModelChoices([]);
           setVisionChoices([]);
-          reportFailure(message);
           return;
         }
         const found = result.models || [];
@@ -177,7 +183,6 @@ export function ProviderEditor({
         if (!cancelled) {
           const message = errorMessage(err, "Could not list models");
           setModelsError(message);
-          reportFailure(message);
         }
       } finally {
         if (!cancelled) {
@@ -209,10 +214,16 @@ export function ProviderEditor({
   };
 
   const save = async () => {
+    const now = Date.now();
+    if (now - saving.current < 400) {
+      return;
+    }
+    saving.current = now;
     const name = draft.name.trim();
     if (!name || name.length > 80) {
       const message = "Provider name must be 1-80 characters";
       setError(message);
+      reportFailure(message);
       onError(message);
       return;
     }
@@ -250,6 +261,7 @@ export function ProviderEditor({
     }
     setError("");
     setModelsError("");
+    setMore(true);
     setNotice("Provider saved. Keys stay in the plugin settings folder and are not shown again.");
     reportSaved("Provider saved. Loading models.");
     setDraft(draftFromProvider(result.provider));
@@ -341,35 +353,44 @@ export function ProviderEditor({
     <SettingsDialog
       title={draft.id ? "Edit provider" : "New provider"}
       onClose={onClose}
+      onOK={() => void save()}
       footer={
         <>
-          <DialogButton onClick={() => void save()}>Save provider</DialogButton>
-          <DialogButton onClick={onClose}>Cancel</DialogButton>
+          <DeckRow onClick={() => void save()}>Save provider</DeckRow>
+          <DeckRow onClick={onClose}>Cancel</DeckRow>
         </>
       }
     >
       <PanelSection title={draft.id ? "Edit provider" : "New provider"}>
+        {error ? (
+          <PanelSectionRow>
+            <div style={{ color: "#f2b8b5", whiteSpace: "pre-wrap" }}>{error}</div>
+          </PanelSectionRow>
+        ) : null}
+        {notice ? (
+          <PanelSectionRow>
+            <div>{notice}</div>
+          </PanelSectionRow>
+        ) : null}
         <PanelSectionRow>
-          <div>{`Type: ${kind?.label || draft.kind}. The highlighted choice is the one that will be saved.`}</div>
+          <div>{`Type: ${kind?.label || draft.kind}`}</div>
         </PanelSectionRow>
-        {PROVIDER_KINDS.map((item) => (
-          <ButtonItem key={item.kind} layout="below" onClick={() => selectKind(item)}>
-            {item.kind === draft.kind ? `Selected: ${item.label}` : item.label}
-          </ButtonItem>
-        ))}
-        {kind ? (
+        {showTypes ? (
+          PROVIDER_KINDS.map((item) => (
+            <DeckRow key={item.kind} layout="below" onClick={() => selectKind(item)}>
+              {item.kind === draft.kind ? `Selected: ${item.label}` : item.label}
+            </DeckRow>
+          ))
+        ) : (
+          <DeckRow layout="below" onClick={() => setShowTypes(true)}>
+            Change type
+          </DeckRow>
+        )}
+        {showTypes && kind ? (
           <PanelSectionRow>
             <div>{kind.description}</div>
           </PanelSectionRow>
         ) : null}
-        <PanelSectionRow>
-          <TextField
-            key="provider-name"
-            label="Name"
-            value={draft.name}
-            onChange={(event) => setDraft((prev) => ({ ...prev, name: fieldValue(event) }))}
-          />
-        </PanelSectionRow>
         <PanelSectionRow>
           <TextField
             key="provider-url"
@@ -378,6 +399,44 @@ export function ProviderEditor({
             onChange={(event) => setDraft((prev) => ({ ...prev, base_url: fieldValue(event) }))}
           />
         </PanelSectionRow>
+        <PanelSectionRow>
+          <TextField
+            key="provider-key"
+            label="API key"
+            bIsPassword
+            value={draft.api_key}
+            onChange={(event) => setDraft((prev) => ({ ...prev, api_key: fieldValue(event), clear_api_key: false }))}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <div>{secretDescription(draft.kind, draft.base_url, draft.has_api_key, draft.api_key_last4)}</div>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <TextField
+            key="provider-name"
+            label="Name"
+            value={draft.name}
+            onChange={(event) => setDraft((prev) => ({ ...prev, name: fieldValue(event) }))}
+          />
+        </PanelSectionRow>
+        {draft.has_api_key ? (
+          <DeckRow
+            layout="below"
+            onClick={() => {
+              setDraft((prev) => ({ ...prev, api_key: "", clear_api_key: true }));
+              setNotice("The saved API key will be removed when you press Save provider.");
+            }}
+          >
+            Remove saved API key
+          </DeckRow>
+        ) : null}
+        {!more ? (
+          <DeckRow layout="below" onClick={() => setMore(true)}>
+            More options
+          </DeckRow>
+        ) : null}
+        {more ? (
+          <>
         <PanelSectionRow>
           <div>
             {draft.kind === "claude_code"
@@ -412,29 +471,13 @@ export function ProviderEditor({
             onChange={(event) => setDraft((prev) => ({ ...prev, max_tokens: fieldValue(event) }))}
           />
         </PanelSectionRow>
-        <PanelSectionRow>
-          <TextField
-            key="provider-key"
-            label="API key"
-            bIsPassword
-            value={draft.api_key}
-            onChange={(event) => setDraft((prev) => ({ ...prev, api_key: fieldValue(event), clear_api_key: false }))}
-          />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <div>{secretDescription(draft.kind, draft.base_url, draft.has_api_key, draft.api_key_last4)}</div>
-        </PanelSectionRow>
-        {draft.has_api_key ? (
-          <ButtonItem
-            layout="below"
-            onClick={() => {
-              setDraft((prev) => ({ ...prev, api_key: "", clear_api_key: true }));
-              setNotice("The saved API key will be removed when you press Save provider.");
-            }}
-          >
-            Remove saved API key
-          </ButtonItem>
+        {kind && kind.oauth !== "none" && !signIn ? (
+          <DeckRow layout="below" onClick={() => setSignIn(true)}>
+            Sign in
+          </DeckRow>
         ) : null}
+        {signIn ? (
+          <>
         {kind && kind.oauth === "claude_code" ? (
           <>
             <PanelSectionRow>
@@ -443,9 +486,9 @@ export function ProviderEditor({
                 Remote mode runs bridge/deckling_bridge.py on a PC instead. Use of Claude Code follows Anthropic's terms.
               </div>
             </PanelSectionRow>
-            <ButtonItem layout="below" disabled={!draft.id || Boolean(draft.base_url.trim())} onClick={() => void login("setup-token")}>
+            <DeckRow layout="below" disabled={!draft.id || Boolean(draft.base_url.trim())} onClick={() => void login("setup-token")}>
               Sign in with setup-token
-            </ButtonItem>
+            </DeckRow>
           </>
         ) : null}
         {kind && kind.oauth === "xai" ? (
@@ -456,9 +499,9 @@ export function ProviderEditor({
                 client secret to paste.
               </div>
             </PanelSectionRow>
-            <ButtonItem layout="below" disabled={!draft.id} onClick={() => void login("device")}>
+            <DeckRow layout="below" disabled={!draft.id} onClick={() => void login("device")}>
               Sign in with device code
-            </ButtonItem>
+            </DeckRow>
           </>
         ) : null}
         {kind && kind.oauth !== "none" && kind.oauth !== "claude_code" && kind.oauth !== "xai" ? (
@@ -488,28 +531,28 @@ export function ProviderEditor({
                 />
               </PanelSectionRow>
             ) : null}
-            <ButtonItem layout="below" disabled={!draft.id} onClick={() => void login("device")}>
+            <DeckRow layout="below" disabled={!draft.id} onClick={() => void login("device")}>
               Sign in with device code
-            </ButtonItem>
-            <ButtonItem layout="below" disabled={!draft.id} onClick={() => void login("pkce")}>
+            </DeckRow>
+            <DeckRow layout="below" disabled={!draft.id} onClick={() => void login("pkce")}>
               Sign in with PKCE on this Deck
-            </ButtonItem>
+            </DeckRow>
           </>
         ) : null}
         {oauth.userCode ? (
           <PanelSectionRow>
             <div>
               <div>Code: {oauth.userCode}</div>
-              <ButtonItem layout="below" onClick={() => void copyText(oauth.userCode)}>
+              <DeckRow layout="below" onClick={() => void copyText(oauth.userCode)}>
                 Copy code
-              </ButtonItem>
+              </DeckRow>
             </div>
           </PanelSectionRow>
         ) : null}
         {oauth.url ? (
-          <ButtonItem layout="below" onClick={() => Navigation.NavigateToExternalWeb(oauth.url)}>
+          <DeckRow layout="below" onClick={() => Navigation.NavigateToExternalWeb(oauth.url)}>
             Open verification page
-          </ButtonItem>
+          </DeckRow>
         ) : null}
         {oauth.message ? (
           <PanelSectionRow>
@@ -522,39 +565,33 @@ export function ProviderEditor({
           </PanelSectionRow>
         ) : null}
         {kind && kind.oauth !== "none" ? (
-          <ButtonItem layout="below" disabled={!draft.id} onClick={() => void cancelOAuth(draft.id)}>
+          <DeckRow layout="below" disabled={!draft.id} onClick={() => void cancelOAuth(draft.id)}>
             Cancel sign-in
-          </ButtonItem>
+          </DeckRow>
         ) : null}
-        {error ? (
-          <PanelSectionRow>
-            <div style={{ color: "#f2b8b5", whiteSpace: "pre-wrap" }}>{error}</div>
-          </PanelSectionRow>
+          </>
         ) : null}
-        {notice ? (
-          <PanelSectionRow>
-            <div>{notice}</div>
-          </PanelSectionRow>
-        ) : null}
-        <ButtonItem layout="below" disabled={!draft.id} onClick={() => void test()}>
+        <DeckRow layout="below" disabled={!draft.id} onClick={() => void test()}>
           Test connection
-        </ButtonItem>
+        </DeckRow>
         {draft.id && !confirmDelete ? (
-          <ButtonItem layout="below" onClick={() => setConfirmDelete(true)}>
+          <DeckRow layout="below" onClick={() => setConfirmDelete(true)}>
             Delete provider
-          </ButtonItem>
+          </DeckRow>
         ) : null}
         {confirmDelete ? (
           <>
             <PanelSectionRow>
               <div>Delete this provider and its saved key?</div>
             </PanelSectionRow>
-            <ButtonItem layout="below" onClick={() => void remove()}>
+            <DeckRow layout="below" onClick={() => void remove()}>
               Delete
-            </ButtonItem>
-            <ButtonItem layout="below" onClick={() => setConfirmDelete(false)}>
+            </DeckRow>
+            <DeckRow layout="below" onClick={() => setConfirmDelete(false)}>
               Keep provider
-            </ButtonItem>
+            </DeckRow>
+          </>
+        ) : null}
           </>
         ) : null}
       </PanelSection>

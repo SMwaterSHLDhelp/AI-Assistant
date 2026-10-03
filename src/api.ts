@@ -1,4 +1,4 @@
-import { callable } from "@decky/api";
+import { callable, toaster } from "@decky/api";
 import type {
   AppState,
   ContextSettings,
@@ -24,71 +24,134 @@ type SessionResult = OkResult & {
   chats?: ChatSettings;
 };
 
+const CALL_MS = 15000;
+
+type BannerHost = { __decklingBanner?: (message: string) => void };
+
 export const logClient = callable<[message: string], OkResult>("log_client");
-export const getState = callable<[], AppState & OkResult>("get_state");
-export const saveProvider = callable<[provider: ProviderInput], OkResult & { provider?: PublicProvider }>(
+
+export function subscribeFailures(listener: (message: string) => void): () => void {
+  const host = window as unknown as BannerHost;
+  host.__decklingBanner = listener;
+  return () => {
+    if (host.__decklingBanner === listener) {
+      host.__decklingBanner = undefined;
+    }
+  };
+}
+
+export function reportCallFailure(message: string): void {
+  const text = message.trim() || "Deckling could not complete that action.";
+  toaster.toast({ title: "Deckling", body: text, duration: 5000 });
+  (window as unknown as BannerHost).__decklingBanner?.(text);
+  void Promise.race([
+    logClient(text).then(() => undefined),
+    new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 2000);
+    }),
+  ]).catch(() => undefined);
+}
+
+function failedResult(result: unknown): result is OkResult {
+  return result !== null && typeof result === "object" && "ok" in result && (result as OkResult).ok === false;
+}
+
+function deckyCall<A extends unknown[], R>(name: string): (...args: A) => Promise<R> {
+  const fn = callable<A, R>(name);
+  return async (...args: A) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        fn(...args),
+        new Promise<R>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`${name} timed out. The Deckling backend did not answer.`));
+          }, CALL_MS);
+        }),
+      ]);
+      if (failedResult(result)) {
+        reportCallFailure(result.error || `${name} failed`);
+      }
+      return result;
+    } catch (err) {
+      const message = err instanceof Error && err.message ? err.message : `${name} failed`;
+      reportCallFailure(message);
+      return { ok: false, error: message } as R;
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    }
+  };
+}
+
+export const getHealth = deckyCall<[], OkResult & { version?: string }>("health");
+export const getDiagnostics = deckyCall<[], OkResult & { version?: string; lines?: string[] }>("diagnostics");
+export const writeDiagnostics = deckyCall<[], OkResult & { path?: string }>("write_diagnostics");
+export const getState = deckyCall<[], AppState & OkResult>("get_state");
+export const saveProvider = deckyCall<[provider: ProviderInput], OkResult & { provider?: PublicProvider }>(
   "save_provider",
 );
-export const deleteProvider = callable<[providerId: string], OkResult>("delete_provider");
-export const saveSettings = callable<
+export const deleteProvider = deckyCall<[providerId: string], OkResult>("delete_provider");
+export const saveSettings = deckyCall<
   [settings: { system_prompt: string; default_provider_id: string; default_model: string }],
   OkResult
 >("save_settings");
-export const newSession = callable<[], SessionResult>("new_session");
-export const switchSession = callable<[sessionId: string], SessionResult>("switch_session");
-export const clearSession = callable<[], SessionResult>("clear_session");
-export const deleteSession = callable<[sessionId: string], SessionResult>("delete_session");
-export const renameSession = callable<[sessionId: string, title: string], SessionResult>("rename_session");
-export const pinSession = callable<[sessionId: string, pinned: boolean], SessionResult>("pin_session");
-export const moveSession = callable<[sessionId: string, gameKey: string, gameLabel: string], SessionResult>(
+export const newSession = deckyCall<[], SessionResult>("new_session");
+export const switchSession = deckyCall<[sessionId: string], SessionResult>("switch_session");
+export const clearSession = deckyCall<[], SessionResult>("clear_session");
+export const deleteSession = deckyCall<[sessionId: string], SessionResult>("delete_session");
+export const renameSession = deckyCall<[sessionId: string, title: string], SessionResult>("rename_session");
+export const pinSession = deckyCall<[sessionId: string, pinned: boolean], SessionResult>("pin_session");
+export const moveSession = deckyCall<[sessionId: string, gameKey: string, gameLabel: string], SessionResult>(
   "move_session",
 );
-export const saveChats = callable<[settings: Partial<ChatSettings>], SessionResult>("save_chats");
-export const testProvider = callable<
+export const saveChats = deckyCall<[settings: Partial<ChatSettings>], SessionResult>("save_chats");
+export const testProvider = deckyCall<
   [providerId: string],
   OkResult & { message?: string; models?: string[]; vision_models?: string[] }
 >("test_provider");
-export const listModels = callable<[providerId: string], OkResult & { models?: string[]; vision_models?: string[] }>(
+export const listModels = deckyCall<[providerId: string], OkResult & { models?: string[]; vision_models?: string[] }>(
   "list_models",
 );
-export const sendMessage = callable<
+export const sendMessage = deckyCall<
   [providerId: string, model: string, content: string, requestId: string, aboutGame: string],
   OkResult & { messages?: AppState["messages"]; sessions?: SessionSummary[] }
 >("send_message");
-export const cancelChat = callable<[requestId: string], OkResult>("cancel_chat");
-export const saveVoice = callable<[settings: Partial<VoiceSettings>], OkResult & { voice?: VoiceSettings }>("save_voice");
-export const setGameContext = callable<
+export const cancelChat = deckyCall<[requestId: string], OkResult>("cancel_chat");
+export const saveVoice = deckyCall<[settings: Partial<VoiceSettings>], OkResult & { voice?: VoiceSettings }>("save_voice");
+export const setGameContext = deckyCall<
   [snapshot: Record<string, unknown>],
   SessionResult & { game?: NowPlaying | null; suggestions?: string[]; context?: ContextSettings }
 >("set_game_context");
-export const saveContext = callable<
+export const saveContext = deckyCall<
   [settings: Partial<ContextSettings>],
   OkResult & { context?: ContextSettings; game?: NowPlaying | null; suggestions?: string[] }
 >("save_context");
-export const saveWeb = callable<[settings: Record<string, unknown>], OkResult & { web?: WebSettings }>("save_web");
-export const saveHearing = callable<[settings: Partial<HearingSettings>], OkResult & { hearing?: HearingSettings }>(
+export const saveWeb = deckyCall<[settings: Record<string, unknown>], OkResult & { web?: WebSettings }>("save_web");
+export const saveHearing = deckyCall<[settings: Partial<HearingSettings>], OkResult & { hearing?: HearingSettings }>(
   "save_hearing",
 );
-export const pushToTalk = callable<[], OkResult & { hearing?: HearingSettings }>("push_to_talk");
-export const stopListening = callable<[], OkResult & { hearing?: HearingSettings }>("stop_listening");
-export const setHearingActivity = callable<
+export const pushToTalk = deckyCall<[], OkResult & { hearing?: HearingSettings }>("push_to_talk");
+export const stopListening = deckyCall<[], OkResult & { hearing?: HearingSettings }>("stop_listening");
+export const setHearingActivity = deckyCall<
   [gameRunning: boolean, sleeping: boolean],
   OkResult & { hearing?: HearingSettings }
 >("set_hearing_activity");
-export const testVoice = callable<[], OkResult & { voice?: VoiceSettings; warning?: string }>("test_voice");
-export const stopSpeaking = callable<[], OkResult>("stop_speaking");
-export const retryKitten = callable<[], OkResult & { voice?: VoiceSettings }>("retry_kitten");
-export const saveLastScreenshot = callable<[], OkResult & { path?: string }>("save_last_screenshot");
-export const lookAtScreen = callable<
+export const testVoice = deckyCall<[], OkResult & { voice?: VoiceSettings; warning?: string }>("test_voice");
+export const stopSpeaking = deckyCall<[], OkResult>("stop_speaking");
+export const retryKitten = deckyCall<[], OkResult & { voice?: VoiceSettings }>("retry_kitten");
+export const saveLastScreenshot = deckyCall<[], OkResult & { path?: string }>("save_last_screenshot");
+export const lookAtScreen = deckyCall<
   [providerId: string, model: string, question: string, requestId: string, game: string, imageB64: string, qamHidden: boolean],
   OkResult & { messages?: AppState["messages"]; sessions?: SessionSummary[]; suggestions?: string[]; vision?: boolean }
 >("look_at_screen");
-export const startOAuth = callable<
+export const startOAuth = deckyCall<
   [providerId: string, flow: string],
   OkResult & { status?: string; message?: string; user_code?: string; verification_url?: string }
 >("start_oauth");
-export const cancelOAuth = callable<[providerId: string], OkResult>("cancel_oauth");
-export const oauthStatus = callable<
+export const cancelOAuth = deckyCall<[providerId: string], OkResult>("cancel_oauth");
+export const oauthStatus = deckyCall<
   [providerId: string],
   OkResult & { status?: string; message?: string; user_code?: string; verification_url?: string }
 >("oauth_status");

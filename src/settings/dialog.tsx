@@ -10,11 +10,13 @@ const STYLE_ID = "deckling-dialog-style";
 export function SettingsDialog({
   title,
   onClose,
+  onOK,
   footer,
   children,
 }: {
   title: string;
   onClose: () => void;
+  onOK?: () => void;
   footer: ReactNode;
   children: ReactNode;
 }) {
@@ -36,7 +38,7 @@ export function SettingsDialog({
     document.head.appendChild(style);
   }, []);
   return (
-    <ModalRoot onCancel={onClose} bDisableBackgroundDismiss modalClassName="deckling-dialog">
+    <ModalRoot onCancel={onClose} onOK={onOK} bDisableBackgroundDismiss modalClassName="deckling-dialog">
       <DialogHeader>{title}</DialogHeader>
       <DialogBody style={{ overflowY: "auto", maxHeight: "calc(100vh - 220px)" }}>{children}</DialogBody>
       <DialogFooter>{footer}</DialogFooter>

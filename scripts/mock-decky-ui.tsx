@@ -68,8 +68,31 @@ export function TextField({
   );
 }
 
-export function Focusable({ children }: { children?: ReactNode }) {
-  return <div>{children}</div>;
+export function Focusable({
+  children,
+  onActivate,
+  onOKButton,
+}: {
+  children?: ReactNode;
+  onActivate?: () => void;
+  onOKButton?: () => void;
+}) {
+  return (
+    <div
+      tabIndex={0}
+      data-deck-row="1"
+      onKeyDown={(event) => {
+        if (event.key !== "Enter") {
+          return;
+        }
+        event.preventDefault();
+        onActivate?.();
+        onOKButton?.();
+      }}
+    >
+      {children}
+    </div>
+  );
 }
 
 export function ConfirmModal() {

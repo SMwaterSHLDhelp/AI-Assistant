@@ -70,17 +70,20 @@ def test_model_list_failure_is_logged_and_does_not_drop_the_provider(tmp_path, m
     assert any("Model list failed" in line and "connection refused" in line for line in warnings)
 
 
-def test_settings_and_provider_screens_keep_actions_on_click() -> None:
+def test_settings_rows_activate_from_the_gamepad_and_from_touch() -> None:
     root = Path("src")
-    source = "\n".join(path.read_text(encoding="utf-8") for path in root.rglob("*.tsx"))
-    assert "Focusable" not in source
+    page = (root / "settings" / "SettingsPage.tsx").read_text(encoding="utf-8")
     route = (root / "settings" / "SettingsRoute.tsx").read_text(encoding="utf-8")
     editor = (root / "settings" / "ProviderEditor.tsx").read_text(encoding="utf-8")
+    row = (root / "DeckRow.tsx").read_text(encoding="utf-8")
     index = (root / "index.tsx").read_text(encoding="utf-8")
+    assert "Focusable" not in page
+    assert "onActivate" in row
+    assert "onOKButton" in row
     assert "SidebarNavigation" in route
-    assert "mountPageShell" in route
+    assert "mountPageShell" not in route
     assert "SettingsRoute" in index
-    assert "DialogBody" in editor or "SettingsDialog" in editor
-    assert "DialogButton" in editor
+    assert "SettingsDialog" in editor
     assert "Save provider" in editor
-    assert "onActivate" not in source
+    assert "Change type" in editor
+    assert "typeLocked" in editor

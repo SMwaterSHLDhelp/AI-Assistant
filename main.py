@@ -1,37 +1,47 @@
+import logging
 import os
 import shutil
 
 import decky
 
+from ai_assistant.diagnostics import diagnostics_path, remember, snapshot, write_report
 from ai_assistant.redact import RedactFilter, redact
 from ai_assistant.service import AssistantService
 
 # Single event name the Quick Access panel and the settings page both listen for.
 EVENT = "deckling_event"
 LEGACY_NAME = "AI Assistant"
+VERSION = "0.1.0-rc.10"
 
 
 class Plugin:
     """Decky entrypoint. Methods are called from the frontend with @decky/api callable()."""
 
     service: AssistantService
+    _boot_error: str = ""
 
     async def _migration(self) -> None:
         migrate_legacy(decky.DECKY_PLUGIN_SETTINGS_DIR, decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger.info)
 
     async def _main(self) -> None:
+        self._boot_error = ""
         decky.logger.addFilter(RedactFilter())
-        # Copy the old plugin's files before the service reads them. _migration does not run every boot.
-        migrate_legacy(decky.DECKY_PLUGIN_SETTINGS_DIR, decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger.info)
-        self.service = AssistantService(
-            decky.DECKY_PLUGIN_SETTINGS_DIR,
-            decky.DECKY_PLUGIN_RUNTIME_DIR,
-            _DeckyHost(),
-        )
-        # Touch the settings directory so a fresh install gets mode 0700 immediately.
-        os.makedirs(decky.DECKY_PLUGIN_SETTINGS_DIR, exist_ok=True)
-        os.chmod(decky.DECKY_PLUGIN_SETTINGS_DIR, 0o700)
-        decky.logger.info("Deckling ready")
+        _install_log_ring()
+        try:
+            # Copy the old plugin's files before the service reads them. _migration does not run every boot.
+            migrate_legacy(decky.DECKY_PLUGIN_SETTINGS_DIR, decky.DECKY_PLUGIN_RUNTIME_DIR, decky.logger.info)
+            self.service = AssistantService(
+                decky.DECKY_PLUGIN_SETTINGS_DIR,
+                decky.DECKY_PLUGIN_RUNTIME_DIR,
+                _DeckyHost(),
+            )
+            # Touch the settings directory so a fresh install gets mode 0700 immediately.
+            os.makedirs(decky.DECKY_PLUGIN_SETTINGS_DIR, exist_ok=True)
+            os.chmod(decky.DECKY_PLUGIN_SETTINGS_DIR, 0o700)
+            decky.logger.info("Deckling ready")
+        except Exception as exc:  # noqa: BLE001 - keep the process up so the UI can show this
+            self._boot_error = redact(str(exc)) or "Deckling failed to start."
+            decky.logger.error("Deckling failed to start: %s", self._boot_error)
 
     async def _unload(self) -> None:
         decky.logger.info("Deckling unloading")
@@ -45,9 +55,36 @@ class Plugin:
 
     async def get_state(self) -> dict:
         # The settings page can open before _main finishes. Say so instead of raising.
-        if not hasattr(self, "service"):
-            return {"ok": False, "error": "Deckling is still starting."}
-        return self._call(self.service.state)
+        blocked = self._blocked()
+        if blocked:
+            return blocked
+        return self._call("state")
+
+    async def health(self) -> dict:
+        blocked = self._blocked()
+        if blocked:
+            return {"ok": False, "version": VERSION, "error": blocked["error"]}
+        return {"ok": True, "version": VERSION, "error": ""}
+
+    async def diagnostics(self) -> dict:
+        return {
+            "ok": True,
+            "version": VERSION,
+            "error": self._boot_error,
+            "lines": snapshot(),
+        }
+
+    async def write_diagnostics(self) -> dict:
+        path = diagnostics_path()
+        header = f"Deckling {VERSION}\n{self._boot_error or 'backend ok'}"
+        try:
+            write_report(path, snapshot(), header)
+        except Exception as exc:  # noqa: BLE001 - returned to the UI, never logged raw
+            message = redact(str(exc)) or "Could not write the diagnostics file."
+            decky.logger.warning("diagnostics file failed: %s", message)
+            return {"ok": False, "error": message}
+        decky.logger.info("Wrote diagnostics to %s", path)
+        return {"ok": True, "path": path}
 
     async def log_client(self, message: str) -> dict:
         text = redact(str(message or "")).replace("\n", " ").strip()[:400]
@@ -56,43 +93,43 @@ class Plugin:
         return {"ok": True}
 
     async def save_provider(self, provider: dict) -> dict:
-        return self._call(self.service.save_provider, provider)
+        return self._call("save_provider", provider)
 
     async def delete_provider(self, provider_id: str) -> dict:
-        return self._call(self.service.delete_provider, provider_id)
+        return self._call("delete_provider", provider_id)
 
     async def save_settings(self, settings: dict) -> dict:
-        return self._call(self.service.save_settings, settings)
+        return self._call("save_settings", settings)
 
     async def new_session(self) -> dict:
-        return self._call(self.service.new_session)
+        return self._call("new_session")
 
     async def switch_session(self, session_id: str) -> dict:
-        return self._call(self.service.switch_session, session_id)
+        return self._call("switch_session", session_id)
 
     async def clear_session(self) -> dict:
-        return self._call(self.service.clear_session)
+        return self._call("clear_session")
 
     async def delete_session(self, session_id: str) -> dict:
-        return self._call(self.service.delete_session, session_id)
+        return self._call("delete_session", session_id)
 
     async def rename_session(self, session_id: str, title: str) -> dict:
-        return self._call(self.service.rename_session, session_id, title)
+        return self._call("rename_session", session_id, title)
 
     async def pin_session(self, session_id: str, pinned: bool) -> dict:
-        return self._call(self.service.pin_session, session_id, pinned)
+        return self._call("pin_session", session_id, pinned)
 
     async def move_session(self, session_id: str, game_key: str, game_label: str) -> dict:
-        return self._call(self.service.move_session, session_id, game_key, game_label)
+        return self._call("move_session", session_id, game_key, game_label)
 
     async def save_chats(self, settings: dict) -> dict:
-        return self._call(self.service.save_chats, settings)
+        return self._call("save_chats", settings)
 
     async def test_provider(self, provider_id: str) -> dict:
-        return await self._acall(self.service.test_provider, provider_id)
+        return await self._acall("test_provider", provider_id)
 
     async def list_models(self, provider_id: str) -> dict:
-        return await self._acall(self.service.list_models, provider_id)
+        return await self._acall("list_models", provider_id)
 
     async def send_message(
         self,
@@ -102,43 +139,43 @@ class Plugin:
         request_id: str,
         about_game: str,
     ) -> dict:
-        return self._call(self.service.start_chat, provider_id, model, content, request_id, about_game)
+        return self._call("start_chat", provider_id, model, content, request_id, about_game)
 
     async def cancel_chat(self, request_id: str) -> dict:
-        return self._call(self.service.cancel_chat, request_id)
+        return self._call("cancel_chat", request_id)
 
     async def set_game_context(self, snapshot: dict) -> dict:
-        return self._call(self.service.set_game_context, snapshot)
+        return self._call("set_game_context", snapshot)
 
     async def save_context(self, settings: dict) -> dict:
-        return self._call(self.service.save_context, settings)
+        return self._call("save_context", settings)
 
     async def save_web(self, settings: dict) -> dict:
-        return self._call(self.service.save_web, settings)
+        return self._call("save_web", settings)
 
     async def save_hearing(self, settings: dict) -> dict:
-        return self._call(self.service.save_hearing, settings)
+        return self._call("save_hearing", settings)
 
     async def push_to_talk(self) -> dict:
-        return self._call(self.service.push_to_talk)
+        return self._call("push_to_talk")
 
     async def stop_listening(self) -> dict:
-        return self._call(self.service.stop_listening)
+        return self._call("stop_listening")
 
     async def set_hearing_activity(self, game_running: bool, sleeping: bool) -> dict:
-        return self._call(self.service.set_hearing_activity, game_running, sleeping)
+        return self._call("set_hearing_activity", game_running, sleeping)
 
     async def save_voice(self, settings: dict) -> dict:
-        return self._call(self.service.save_voice, settings)
+        return self._call("save_voice", settings)
 
     async def test_voice(self) -> dict:
-        return await self._acall(self.service.test_voice)
+        return await self._acall("test_voice")
 
     async def stop_speaking(self) -> dict:
-        return self._call(self.service.stop_speaking)
+        return self._call("stop_speaking")
 
     async def retry_kitten(self) -> dict:
-        return await self._acall(self.service.retry_kitten)
+        return await self._acall("retry_kitten")
 
     async def look_at_screen(
         self,
@@ -151,7 +188,7 @@ class Plugin:
         qam_hidden: bool,
     ) -> dict:
         return self._call(
-            self.service.look_at_screen,
+            "look_at_screen",
             provider_id,
             model,
             question,
@@ -162,30 +199,60 @@ class Plugin:
         )
 
     async def save_last_screenshot(self) -> dict:
-        return self._call(self.service.save_last_screenshot)
+        return self._call("save_last_screenshot")
 
     async def start_oauth(self, provider_id: str, flow: str) -> dict:
-        return self._call(self.service.start_oauth, provider_id, flow)
+        return self._call("start_oauth", provider_id, flow)
 
     async def cancel_oauth(self, provider_id: str) -> dict:
-        return self._call(self.service.cancel_oauth, provider_id)
+        return self._call("cancel_oauth", provider_id)
 
     async def oauth_status(self, provider_id: str) -> dict:
-        return self._call(self.service.oauth_status, provider_id)
+        return self._call("oauth_status", provider_id)
 
-    def _call(self, fn, *args):  # type: ignore[no-untyped-def]
+    def _blocked(self) -> dict | None:
+        if self._boot_error:
+            return {"ok": False, "error": self._boot_error}
+        if not hasattr(self, "service"):
+            return {"ok": False, "error": "Deckling is still starting."}
+        return None
+
+    def _call(self, name: str, *args):  # type: ignore[no-untyped-def]
+        blocked = self._blocked()
+        if blocked:
+            return blocked
         try:
-            return fn(*args)
+            return getattr(self.service, name)(*args)
         except Exception as exc:  # noqa: BLE001 - returned to the UI, never logged raw
-            decky.logger.warning("%s failed: %s", getattr(fn, "__name__", "call"), redact(str(exc)))
+            decky.logger.warning("%s failed: %s", name, redact(str(exc)))
             return {"ok": False, "error": redact(str(exc))}
 
-    async def _acall(self, fn, *args):  # type: ignore[no-untyped-def]
+    async def _acall(self, name: str, *args):  # type: ignore[no-untyped-def]
+        blocked = self._blocked()
+        if blocked:
+            return blocked
         try:
-            return await fn(*args)
+            return await getattr(self.service, name)(*args)
         except Exception as exc:  # noqa: BLE001 - returned to the UI, never logged raw
-            decky.logger.warning("%s failed: %s", getattr(fn, "__name__", "call"), redact(str(exc)))
+            decky.logger.warning("%s failed: %s", name, redact(str(exc)))
             return {"ok": False, "error": redact(str(exc))}
+
+
+def _install_log_ring() -> None:
+    if getattr(decky.logger, "_deckling_ring", False):
+        return
+
+    class _Ring(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            try:
+                remember(redact(self.format(record)))
+            except Exception:
+                return
+
+    handler = _Ring()
+    handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    decky.logger.addHandler(handler)
+    decky.logger._deckling_ring = True  # type: ignore[attr-defined]
 
 
 def migrate_legacy(settings_dir: str, runtime_dir: str, log) -> None:

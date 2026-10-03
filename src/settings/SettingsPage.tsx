@@ -1,11 +1,25 @@
-import { ButtonItem, DialogButton, Navigation, PanelSection, PanelSectionRow, TextField, showModal } from "@decky/ui";
+import { Navigation, PanelSection, PanelSectionRow, TextField, showModal } from "@decky/ui";
 import { useEffect, useState } from "react";
-import { deleteProvider, getState, saveChats, saveContext, saveSettings, saveVoice, saveWeb, testProvider } from "../api";
+import {
+  deleteProvider,
+  getDiagnostics,
+  getHealth,
+  getState,
+  saveChats,
+  saveContext,
+  saveSettings,
+  saveVoice,
+  saveWeb,
+  subscribeFailures,
+  testProvider,
+  writeDiagnostics,
+} from "../api";
 import { PROVIDER_KINDS, kindInfo } from "../catalog";
+import { DeckRow } from "../DeckRow";
 import { fieldValue } from "../form";
-import { reportFailure } from "../notify";
 import { FirstRun, PRESET_KEY, QUICK_PRESETS, presetBaseUrl } from "../onboarding";
 import { errorMessage, sleep, withRetry } from "../retry";
+import { copyText } from "../steam";
 import type { AppState, ContextSettings, OkResult, PublicProvider, WebSettings } from "../types";
 import { defaultChats, defaultContext, defaultHearing, defaultVoice, defaultWeb } from "../types";
 import { SettingsDialog } from "./dialog";
@@ -47,10 +61,12 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [voiceOffer, setVoiceOffer] = useState(false);
   const [pendingDelete, setPendingDelete] = useState("");
+  const [healthLine, setHealthLine] = useState("Backend: checking…");
+  const [healthOk, setHealthOk] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   const report = (message: string) => {
     setError(message);
-    reportFailure(message);
   };
 
   const applyLoaded = (loaded: Partial<AppState> & OkResult) => {
@@ -86,8 +102,14 @@ export function SettingsPage() {
           return;
         }
         lastError = loaded.error || lastError;
+        if (lastError.includes("timed out")) {
+          break;
+        }
       } catch (err) {
         lastError = errorMessage(err, lastError);
+        if (lastError.includes("timed out")) {
+          break;
+        }
       }
       if (attempt < 2) {
         await sleep(400 * (attempt + 1));
@@ -97,13 +119,25 @@ export function SettingsPage() {
     report(lastError);
   };
 
-  const openDraft = (initial: Draft) => {
+  const refreshHealth = async () => {
+    const health = await getHealth();
+    if (!health.ok) {
+      setHealthOk(false);
+      setHealthLine(health.error || "Backend is not connected.");
+      return;
+    }
+    setHealthOk(true);
+    setHealthLine(health.version ? `Backend: connected v${health.version}` : "Backend: connected");
+  };
+
+  const openDraft = (initial: Draft, typeLocked = false) => {
     const wasEmpty = state.providers.length === 0;
     const handle = { close: () => undefined as void };
     try {
       const opened = showModal(
         <ProviderEditor
           initial={initial}
+          typeLocked={typeLocked}
           onClose={() => handle.close()}
           onSaved={async () => {
             await load();
@@ -137,10 +171,12 @@ export function SettingsPage() {
     if (preset && (kind === "ollama" || kind === "llamacpp")) {
       initial.name = preset.title;
     }
-    openDraft(initial);
+    openDraft(initial, true);
   };
 
   useEffect(() => {
+    const unsubscribe = subscribeFailures((message) => setError(message));
+    void refreshHealth();
     void load().then(() => {
       try {
         const kind = sessionStorage.getItem(PRESET_KEY);
@@ -152,6 +188,7 @@ export function SettingsPage() {
         // sessionStorage can be blocked. The presets on this page still work.
       }
     });
+    return unsubscribe;
   }, []);
 
   const openDefaults = () => {
@@ -255,17 +292,24 @@ export function SettingsPage() {
   };
 
   const setScreen = async (enabled: boolean) => {
-    const result = await saveVoice({ screen_capture: enabled });
-    if (!result.ok || !result.voice) {
-      report(result.error || "Could not save screen help");
-      return;
+    try {
+      const result = await saveVoice({ screen_capture: enabled });
+      if (!result.ok || !result.voice) {
+        report(result.error || "Could not save screen help");
+        return;
+      }
+      setState((prev) => ({ ...prev, voice: result.voice || prev.voice }));
+    } catch (err) {
+      report(errorMessage(err, "Could not save screen help"));
     }
-    setState((prev) => ({ ...prev, voice: result.voice || prev.voice }));
   };
 
   return (
     <div style={{ padding: "8px 16px 24px", width: "100%", boxSizing: "border-box" }}>
       <PanelSection title="Deckling">
+        <PanelSectionRow>
+          <div style={{ color: healthOk ? "#3dd68c" : "#f2b8b5", fontSize: "16px" }}>{healthLine}</div>
+        </PanelSectionRow>
         <PanelSectionRow>
           <div style={{ fontSize: "15px" }}>A tiny companion for this Deck. B returns to the previous page.</div>
         </PanelSectionRow>
@@ -274,9 +318,9 @@ export function SettingsPage() {
             <div>Loading settings…</div>
           </PanelSectionRow>
         ) : null}
-        <ButtonItem layout="below" onClick={() => Navigation.NavigateBack()}>
+        <DeckRow layout="below" onClick={() => Navigation.NavigateBack()}>
           Back
-        </ButtonItem>
+        </DeckRow>
       </PanelSection>
 
       {error ? (
@@ -300,7 +344,7 @@ export function SettingsPage() {
           <PanelSectionRow>
             <div>Optional. Deckling can listen for “hey jarvis”. The model downloads onto this Deck the first time you turn it on.</div>
           </PanelSectionRow>
-          <ButtonItem
+          <DeckRow
             layout="below"
             onClick={() => {
               setVoiceOffer(false);
@@ -308,7 +352,7 @@ export function SettingsPage() {
             }}
           >
             Set up voice later
-          </ButtonItem>
+          </DeckRow>
         </PanelSection>
       ) : null}
 
@@ -325,9 +369,11 @@ export function SettingsPage() {
             onDelete={() => void remove(provider.id)}
           />
         ))}
-        <ButtonItem layout="below" onClick={() => openEditor()}>
-          Add provider
-        </ButtonItem>
+        {state.providers.length > 0 ? (
+          <DeckRow layout="below" onClick={() => openEditor()}>
+            Add provider
+          </DeckRow>
+        ) : null}
       </PanelSection>
 
       <div id="deckling-voice">
@@ -352,9 +398,9 @@ export function SettingsPage() {
         <PanelSectionRow>
           <div>Screenshots go only to the provider you picked, and only when you ask about the screen. They are not saved unless you press Save screenshot.</div>
         </PanelSectionRow>
-        <ButtonItem layout="below" onClick={() => void setScreen(!state.voice.screen_capture)}>
+        <DeckRow layout="below" onClick={() => void setScreen(!state.voice.screen_capture)}>
           {state.voice.screen_capture ? "Screen capture: on" : "Screen capture: off"}
-        </ButtonItem>
+        </DeckRow>
       </PanelSection>
 
       <PanelSection title="Privacy">
@@ -367,34 +413,44 @@ export function SettingsPage() {
             uninstall that entry after your providers show up here.
           </div>
         </PanelSectionRow>
-        <ButtonItem layout="below" onClick={() => void patchContext({ share_game_context: !state.context.share_game_context })}>
+        <DeckRow layout="below" onClick={() => void patchContext({ share_game_context: !state.context.share_game_context })}>
           {state.context.share_game_context ? "Share game context with AI: on" : "Share game context with AI: off"}
-        </ButtonItem>
-        <ButtonItem layout="below" onClick={() => void patchContext({ include_achievements: !state.context.include_achievements })}>
-          {state.context.include_achievements ? "Include achievements: on" : "Include achievements: off"}
-        </ButtonItem>
-        <ButtonItem layout="below" onClick={() => void patchContext({ include_playtime: !state.context.include_playtime })}>
-          {state.context.include_playtime ? "Include playtime: on" : "Include playtime: off"}
-        </ButtonItem>
-        <ButtonItem layout="below" onClick={() => void patchWeb({ enabled: !state.web.enabled })}>
+        </DeckRow>
+        {state.context.share_game_context ? (
+          <>
+            <DeckRow layout="below" onClick={() => void patchContext({ include_achievements: !state.context.include_achievements })}>
+              {state.context.include_achievements ? "Include achievements: on" : "Include achievements: off"}
+            </DeckRow>
+            <DeckRow layout="below" onClick={() => void patchContext({ include_playtime: !state.context.include_playtime })}>
+              {state.context.include_playtime ? "Include playtime: on" : "Include playtime: off"}
+            </DeckRow>
+          </>
+        ) : null}
+        <DeckRow layout="below" onClick={() => void patchWeb({ enabled: !state.web.enabled })}>
           {state.web.enabled ? "Web lookup: on" : "Web lookup: off"}
-        </ButtonItem>
-        <ButtonItem layout="below" onClick={cycleSearch}>
-          {`Search: ${SEARCH_LABEL[state.web.provider] || "DuckDuckGo"}`}
-        </ButtonItem>
-        <ButtonItem layout="below" onClick={openSearch}>
-          Edit search setup
-        </ButtonItem>
+        </DeckRow>
+        {state.web.enabled ? (
+          <>
+            <DeckRow layout="below" onClick={cycleSearch}>
+              {`Search: ${SEARCH_LABEL[state.web.provider] || "DuckDuckGo"}`}
+            </DeckRow>
+            {state.web.provider !== "duckduckgo" ? (
+              <DeckRow layout="below" onClick={openSearch}>
+                Edit search setup
+              </DeckRow>
+            ) : null}
+          </>
+        ) : null}
       </PanelSection>
 
       <PanelSection title="Advanced">
         <PanelSectionRow>
           <div>The default provider, model, and system prompt. Typing happens in a dialog so the Steam keyboard stays put.</div>
         </PanelSectionRow>
-        <ButtonItem layout="below" onClick={openDefaults}>
+        <DeckRow layout="below" onClick={openDefaults}>
           Edit defaults
-        </ButtonItem>
-        <ButtonItem
+        </DeckRow>
+        <DeckRow
           layout="below"
           onClick={() => {
             const next = state.chats.keep === 20 ? 40 : state.chats.keep === 40 ? 80 : 20;
@@ -412,8 +468,8 @@ export function SettingsPage() {
           }}
         >
           {`Keep chats: ${state.chats.keep}`}
-        </ButtonItem>
-        <ButtonItem
+        </DeckRow>
+        <DeckRow
           layout="below"
           onClick={() => {
             void saveChats({ remember_model: !state.chats.remember_model }).then((result) => {
@@ -426,9 +482,53 @@ export function SettingsPage() {
           }}
         >
           {state.chats.remember_model ? "Remember model per chat: on" : "Remember model per chat: off"}
-        </ButtonItem>
+        </DeckRow>
+        <DeckRow layout="below" onClick={() => setShowDiagnostics((open) => !open)}>
+          {showDiagnostics ? "Hide diagnostics" : "Diagnostics"}
+        </DeckRow>
+        {showDiagnostics ? <DiagnosticsPanel /> : null}
       </PanelSection>
     </div>
+  );
+}
+
+function DiagnosticsPanel() {
+  const [lines, setLines] = useState<string[]>([]);
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    void getDiagnostics().then((result) => {
+      if (!result.ok) {
+        setNote(result.error || "Could not read the log");
+        return;
+      }
+      setLines(result.lines || []);
+    });
+  }, []);
+  const text = (lines.length ? lines : ["No log lines yet."]).slice(-30).join("\n");
+  return (
+    <>
+      <PanelSectionRow>
+        <div style={{ whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: "13px" }}>{text}</div>
+      </PanelSectionRow>
+      <DeckRow layout="below" onClick={() => void copyText(text)}>
+        Copy diagnostics
+      </DeckRow>
+      <DeckRow
+        layout="below"
+        onClick={() => {
+          void writeDiagnostics().then((result) => {
+            setNote(result.ok && result.path ? `Saved ${result.path}` : result.error || "Could not write the diagnostics file");
+          });
+        }}
+      >
+        Save diagnostics to home
+      </DeckRow>
+      {note ? (
+        <PanelSectionRow>
+          <div>{note}</div>
+        </PanelSectionRow>
+      ) : null}
+    </>
   );
 }
 
@@ -476,25 +576,25 @@ function ProviderCard({
           {provider.connection_detail ? <div style={{ fontSize: "14px" }}>{provider.connection_detail}</div> : null}
         </div>
       </PanelSectionRow>
-      <ButtonItem layout="below" onClick={onEdit}>
+      <DeckRow layout="below" onClick={onEdit}>
         {`Edit ${provider.name}`}
-      </ButtonItem>
-      <ButtonItem layout="below" onClick={onTest}>
+      </DeckRow>
+      <DeckRow layout="below" onClick={onTest}>
         {`Test ${provider.name}`}
-      </ButtonItem>
+      </DeckRow>
       {pendingDelete ? (
         <>
-          <ButtonItem layout="below" onClick={onDelete}>
+          <DeckRow layout="below" onClick={onDelete}>
             Delete
-          </ButtonItem>
-          <ButtonItem layout="below" onClick={onCancelDelete}>
+          </DeckRow>
+          <DeckRow layout="below" onClick={onCancelDelete}>
             Keep provider
-          </ButtonItem>
+          </DeckRow>
         </>
       ) : (
-        <ButtonItem layout="below" onClick={onAskDelete}>
+        <DeckRow layout="below" onClick={onAskDelete}>
           {`Delete ${provider.name}`}
-        </ButtonItem>
+        </DeckRow>
       )}
     </>
   );
@@ -548,10 +648,11 @@ function DefaultsSection({
     <SettingsDialog
       title="Defaults"
       onClose={onClose}
+      onOK={() => void save()}
       footer={
         <>
-          <DialogButton onClick={() => void save()}>Save defaults</DialogButton>
-          <DialogButton onClick={onClose}>Cancel</DialogButton>
+          <DeckRow onClick={() => void save()}>Save defaults</DeckRow>
+          <DeckRow onClick={onClose}>Cancel</DeckRow>
         </>
       }
     >
@@ -562,7 +663,7 @@ function DefaultsSection({
           </PanelSectionRow>
         ) : (
           providers.map((item) => (
-            <ButtonItem
+            <DeckRow
               key={item.id}
               layout="below"
               onClick={() => {
@@ -571,7 +672,7 @@ function DefaultsSection({
               }}
             >
               {providerId === item.id ? `Default: ${item.name}` : `Use ${item.name}`}
-            </ButtonItem>
+            </DeckRow>
           ))
         )}
         <PanelSectionRow>
@@ -601,36 +702,35 @@ function SearchSetup({
   const [key, setKey] = useState("");
   const keyField =
     web.provider === "brave" ? "brave_key" : web.provider === "tavily" ? "tavily_key" : web.provider === "serper" ? "serper_key" : "";
+  const save = () => {
+    const patch: Record<string, string> = {};
+    if (web.provider === "searxng") {
+      patch.searxng_url = url;
+    }
+    if (keyField && key.trim()) {
+      patch[keyField] = key.trim();
+    }
+    onSave(patch);
+  };
+  const hint =
+    web.provider === "searxng"
+      ? "Paste the SearXNG instance URL."
+      : "Paste the API key for this search provider. It stays on this Deck.";
   return (
     <SettingsDialog
       title="Search setup"
       onClose={onClose}
+      onOK={save}
       footer={
         <>
-          <DialogButton
-            onClick={() => {
-              const patch: Record<string, string> = {};
-              if (web.provider === "searxng") {
-                patch.searxng_url = url;
-              }
-              if (keyField && key.trim()) {
-                patch[keyField] = key.trim();
-              }
-              onSave(patch);
-            }}
-          >
-            Save
-          </DialogButton>
-          <DialogButton onClick={onClose}>Cancel</DialogButton>
+          <DeckRow onClick={save}>Save</DeckRow>
+          <DeckRow onClick={onClose}>Cancel</DeckRow>
         </>
       }
     >
       <PanelSection title="Search setup">
         <PanelSectionRow>
-          <div>
-            DuckDuckGo needs no key. SearXNG uses an instance URL. Brave, Tavily, and Serper use an API key stored on
-            this Deck.
-          </div>
+          <div>{hint}</div>
         </PanelSectionRow>
         {web.provider === "searxng" ? (
           <PanelSectionRow>

@@ -1,4 +1,5 @@
-import { ButtonItem, PanelSectionRow, TextField } from "@decky/ui";
+import { PanelSectionRow, TextField } from "@decky/ui";
+import { DeckRow } from "./DeckRow";
 import { fieldValue } from "./form";
 
 const VISIBLE_MODELS = 40;
@@ -42,9 +43,9 @@ export function ModelPicker({
       {shown.map((id) => {
         const sees = visionIds?.includes(id) ? " · sees the screen" : "";
         return (
-          <ButtonItem key={id} layout="below" onClick={() => onChange(id)}>
+          <DeckRow key={id} layout="below" onClick={() => onChange(id)}>
             {value === id ? `Selected: ${id}${sees}` : `${id}${sees}`}
-          </ButtonItem>
+          </DeckRow>
         );
       })}
       {models.length > shown.length ? (
@@ -55,9 +56,9 @@ export function ModelPicker({
       <PanelSectionRow>
         <TextField label={label} value={value} onChange={(event) => onChange(fieldValue(event))} />
       </PanelSectionRow>
-      <ButtonItem layout="below" onClick={onRefresh}>
+      <DeckRow layout="below" onClick={onRefresh}>
         {loading ? "Refreshing models…" : "Refresh models"}
-      </ButtonItem>
+      </DeckRow>
     </>
   );
 }

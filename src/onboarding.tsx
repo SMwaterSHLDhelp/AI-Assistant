@@ -1,5 +1,6 @@
-import { ButtonItem, PanelSection, PanelSectionRow } from "@decky/ui";
+import { PanelSection, PanelSectionRow } from "@decky/ui";
 import { kindInfo } from "./catalog";
+import { DeckRow } from "./DeckRow";
 
 export const PRESET_KEY = "deckling-preset";
 
@@ -44,13 +45,13 @@ export function FirstRun({
         <div>Add your first provider. I can then chat, listen, and look at the game with you.</div>
       </PanelSectionRow>
       {QUICK_PRESETS.map((preset) => (
-        <ButtonItem key={preset.kind} layout="below" description={preset.hint} onClick={() => onPreset(preset.kind)}>
+        <DeckRow key={preset.kind} layout="below" description={preset.hint} onClick={() => onPreset(preset.kind)}>
           {preset.title}
-        </ButtonItem>
+        </DeckRow>
       ))}
-      <ButtonItem layout="below" onClick={onCustom}>
+      <DeckRow layout="below" onClick={onCustom}>
         Add provider
-      </ButtonItem>
+      </DeckRow>
     </PanelSection>
   );
 }

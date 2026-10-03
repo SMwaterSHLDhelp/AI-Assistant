@@ -135,6 +135,31 @@ def test_legacy_ai_assistant_files_are_copied_once(tmp_path) -> None:
     asyncio.run(run())
 
 
+def test_a_startup_failure_stays_on_screen_instead_of_killing_the_process(tmp_path, monkeypatch) -> None:
+    main = _load_plugin(tmp_path)
+
+    class Boom:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("settings dir is not writable")
+
+    monkeypatch.setattr(main, "AssistantService", Boom)
+
+    async def run() -> None:
+        plugin = main.Plugin()
+        await plugin._main()
+        health = await plugin.health()
+        assert health["ok"] is False
+        assert "not writable" in health["error"]
+        assert health["version"]
+        saved = await plugin.save_provider({"kind": "llamacpp", "name": "PC", "base_url": "http://127.0.0.1:8080/v1"})
+        assert saved["ok"] is False
+        assert "not writable" in saved["error"]
+        report = await plugin.diagnostics()
+        assert any("not writable" in line for line in report["lines"])
+
+    asyncio.run(run())
+
+
 def test_legacy_copy_skips_a_path_that_is_itself(tmp_path) -> None:
     main = _load_plugin(tmp_path)
     dest = tmp_path / "settings"

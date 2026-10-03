@@ -14,7 +14,7 @@ These are headless renders at 1280×800 with the Decky controls mocked. A captur
 | --- | --- |
 | ![Quick Access chat](docs/screenshots/after-chat.png) | ![Provider settings](docs/screenshots/after-settings.png) |
 
-The chat shows the provider and model on one button, the conversation, and Look at my screen, New chat, and Summarize. Settings groups Providers, Voice, Spoken replies, Screen help, Privacy, and Advanced. Text entry stays in a dialog.
+The chat shows the provider and model on one button, the conversation, and Look at my screen, New chat, and Summarize. Settings groups Providers, Voice, Spoken replies, Screen help, Privacy, and Advanced. Text entry stays in a dialog. The top of settings says whether the backend is connected. Advanced, Diagnostics can copy the recent log or save it as `~/Deckling-diagnostics.txt`.
 
 ## Install
 

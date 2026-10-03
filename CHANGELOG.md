@@ -6,6 +6,16 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [Unreleased]
 
+## [0.1.0-rc.10] - 2026-10-03
+
+### Fixed
+
+- Settings rows respond to the A button and to touch. Save provider, the wake word switch, and the spoken-reply engine were only listening for a click, so the gamepad did nothing and a failed backend call left the row unchanged.
+- A preset such as llama.cpp opens its form directly. The type is already chosen. URL, key, and name are first, and Save stays in the dialog footer. Change type is a single row in that same dialog.
+- Spoken replies show the voice, speed, and test line only for the engine you picked. Wake word sensitivity and the wake word list appear only after openWakeWord is on. Sign-in fields and search keys appear only for the choice that uses them.
+- The top of settings shows whether the backend is connected. Advanced, Diagnostics shows the last log lines, and can copy them or write them to ~/Deckling-diagnostics.txt. A failed call shows the reason on screen.
+- A missing speech package can no longer stop the plugin from starting. Those imports stay inside the worker that needs them.
+
 ## [0.1.0-rc.9] - 2026-10-03
 
 ### Fixed
