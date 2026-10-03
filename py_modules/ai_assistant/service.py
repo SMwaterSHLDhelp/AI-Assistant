@@ -874,7 +874,7 @@ class AssistantService:
                         except ToolsUnsupported:
                             if streamed:
                                 return
-                    if web_client.enabled and (game_name or question):
+                    if web_client.enabled and game_name:
                         _status("searching")
                         block = web_client.auto(game_name, question)
                         _status("idle")
