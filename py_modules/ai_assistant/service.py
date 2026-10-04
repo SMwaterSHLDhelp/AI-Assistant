@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import os
 import secrets
 import threading
 import time
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from . import claude_code, oauth, providers
@@ -23,10 +25,10 @@ from .oauth import OAuthError
 from .redact import redact
 from .screen import CaptureError, capture_screen, decode_supplied_image
 from .store import Store, normalize_voice, public_provider, public_session_summary
-from .vision import DEFAULT_QUESTION, jarvis_prompt, model_can_see, vision_ids
-from .voice import VoiceEngine
+from .vision import DEFAULT_QUESTION, jarvis_prompt, model_can_see, model_sees_images, vision_ids
+from .voice import SPOKEN_STYLE, VoiceEngine
 from .web import WebClient, normalize_web, public_web
-from .web_chat import TOOL_KINDS, ToolsUnsupported, iter_with_tools
+from .web_chat import TOOL_KINDS, ScreenCapture, ToolsUnsupported, iter_with_tools
 
 EVENT = "deckling_event"
 _GAME_NAME_LIMIT = 120
@@ -163,7 +165,9 @@ class AssistantService:
             notify=self._hearing_notify,
             on_command=self._hearing_command,
             pending=self._hearing_pending,
+            speaking=self.voice.is_speaking,
         )
+        self._vision_cache: dict[tuple[str, str], bool] = {}
         if self.hearing.public()["wake_enabled"]:
             self.hearing.start()
         self.screen_grabbers = None
@@ -473,6 +477,9 @@ class AssistantService:
     def push_to_talk(self) -> dict[str, Any]:
         if not self.hearing.public()["ptt_enabled"]:
             return _fail("Push to talk is turned off in settings.")
+        if self.voice.is_speaking():
+            self.voice.stop()
+            return {"ok": True, "stopped": True, "hearing": self.hearing.public()}
         self.voice.stop()
         self.hearing.begin_ptt()
         return {"ok": True, "hearing": self.hearing.public()}
@@ -511,6 +518,10 @@ class AssistantService:
         if action == "new_chat":
             self.new_session()
             self._hearing_notify({"type": "hearing", "phase": "idle", "message": "New chat"})
+            return
+        if action == "stop_talking":
+            self.voice.stop()
+            self._hearing_notify({"type": "speech", "status": "done"})
             return
         if action == "cancel":
             self.voice.stop()
@@ -640,12 +651,62 @@ class AssistantService:
         overrides = provider.get("vision_override") if isinstance(provider.get("vision_override"), dict) else {}
         if chosen in overrides:
             return bool(overrides[chosen])
+        key = (str(provider.get("id") or provider.get("base_url") or ""), chosen)
+        if key in self._vision_cache:
+            return self._vision_cache[key]
         auto: set[str] = set()
+        described = False
         try:
             auto = set(providers.describe_models(provider).vision)
+            described = True
         except (HttpError, ValueError, OSError, ClaudeCodeError):
             auto = set()
-        return model_can_see(provider, chosen, auto)
+        seen = model_can_see(provider, chosen, auto)
+        if described:
+            self._vision_cache[key] = seen
+        return seen
+
+    def _offer_screen_tool(self, provider: dict[str, Any], chosen: str) -> bool:
+        if not bool(normalize_voice(self.store.load_config().get("voice"))["screen_capture"]):
+            return False
+        if provider.get("kind") not in TOOL_KINDS:
+            return False
+        overrides = provider.get("vision_override") if isinstance(provider.get("vision_override"), dict) else {}
+        if chosen in overrides:
+            return bool(overrides[chosen])
+        if model_sees_images(chosen):
+            return True
+        if provider.get("kind") not in {"llamacpp", "custom", "ollama"}:
+            return False
+        return self._model_can_see(provider, chosen)
+
+    def _grab_for_model(self, announce: Callable[[str], None]) -> tuple[str, bytes | None]:
+        if not bool(normalize_voice(self.store.load_config().get("voice"))["screen_capture"]):
+            return json.dumps({"error": "Screen capture is turned off in settings."}), None
+        announce("Taking photo")
+        try:
+            raw = capture_screen(
+                qam_hidden=True,
+                enabled=True,
+                runtime_dir=self.store.runtime_dir,
+                grabbers=self.screen_grabbers,
+            )
+            jpeg = to_jpeg(raw)
+        except Exception as exc:  # noqa: BLE001 - the model hears the capture error
+            return json.dumps({"error": str(exc)[:400]}), None
+        self._last_jpeg = jpeg
+        announce("Looking at your screen...")
+        return json.dumps({"ok": True, "note": "Screenshot attached."}), jpeg
+
+    def _with_voice(self, prompt: str) -> str:
+        if not self.voice.enabled():
+            return prompt
+        if SPOKEN_STYLE in (prompt or ""):
+            return prompt
+        base = (prompt or "").rstrip()
+        if not base:
+            return SPOKEN_STYLE
+        return base + "\n\n" + SPOKEN_STYLE
 
     def set_model_vision(self, provider_id: str, model: str, enabled: bool) -> dict[str, Any]:
         record = self.store.set_model_vision(provider_id, model, enabled)
@@ -821,9 +882,11 @@ class AssistantService:
                 "message": "Looking at your screen...",
             }
         )
+        await self._emit({"type": "toast", "message": "Taking photo"})
         try:
             raw = await asyncio.to_thread(self._obtain_screen, image_b64)
             jpeg = await asyncio.to_thread(to_jpeg, raw)
+            await self._emit({"type": "toast", "message": "Looking at your screen..."})
             self._last_jpeg = jpeg
             self.store.append_message(session_id, "user", f"[Looking at the screen] {question}")
         except Exception as exc:  # noqa: BLE001 - shown in the panel, never logged raw
@@ -875,7 +938,11 @@ class AssistantService:
             raise CaptureError(" ".join(errors)[:500]) from exc
 
     async def test_screen(self) -> dict[str, Any]:
-        return await asyncio.to_thread(self._test_screen)
+        await self._emit({"type": "toast", "message": "Taking photo"})
+        result = await asyncio.to_thread(self._test_screen)
+        if result.get("ok"):
+            await self._emit({"type": "toast", "message": "Looking at your screen..."})
+        return result
 
     def _test_screen(self) -> dict[str, Any]:
         try:
@@ -913,14 +980,14 @@ class AssistantService:
                 current = next(item for item in _data["sessions"] if item.get("id") == session_id)
             if history_override is not None:
                 history = history_override
-                prompt = system_override or ""
+                prompt = self._with_voice(system_override or "")
             else:
                 history = [
                     {"role": item["role"], "content": item["content"]}
                     for item in (current.get("messages") or [])
                     if item.get("role") in {"user", "assistant"}
                 ]
-                prompt = self._with_game_context(str(config.get("system_prompt") or ""), config)
+                prompt = self._with_voice(self._with_game_context(str(config.get("system_prompt") or ""), config))
             messages = providers.prepare_messages(provider, history, prompt)
             meta["session_id"] = str(current.get("claude_session_id") or "")
             self.host.info("Chat started kind=%s model=%s screen=%s", provider.get("kind"), chosen, bool(image))
@@ -939,9 +1006,26 @@ class AssistantService:
                 outgoing = messages
                 streamed = False
                 try:
-                    if web_client.enabled and not image and kind_name in TOOL_KINDS:
+                    offer_screen = (not image) and self._offer_screen_tool(provider, chosen)
+
+                    def _announce(message: str) -> None:
+                        asyncio.run_coroutine_threadsafe(
+                            self._emit({"type": "toast", "message": message}), loop
+                        ).result()
+
+                    screen = ScreenCapture(lambda _args: self._grab_for_model(_announce)) if offer_screen else None
+                    if (web_client.enabled or screen is not None) and not image and kind_name in TOOL_KINDS:
                         try:
-                            for delta in iter_with_tools(provider, outgoing, chosen, cancel, web_client, _status):
+                            for delta in iter_with_tools(
+                                provider,
+                                outgoing,
+                                chosen,
+                                cancel,
+                                web_client,
+                                _status,
+                                screen,
+                                web_client.enabled,
+                            ):
                                 if cancel.is_set():
                                     break
                                 streamed = True

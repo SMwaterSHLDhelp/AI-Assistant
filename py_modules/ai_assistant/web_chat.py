@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import threading
@@ -29,6 +30,10 @@ _HINT = (
     "You can call web_search and fetch_page when a fact about the game would help. "
     "Prefer Fandom or wiki.gg, PCGamingWiki, Steam guides, and the Steam store."
 )
+_SCREEN_HINT = (
+    "You can call look_at_screen when a screenshot would answer the question. "
+    "The app shows a Taking photo banner before it captures, so the shot is never silent."
+)
 
 Executor = Callable[[str, dict[str, Any]], str]
 Status = Callable[[str], None]
@@ -38,27 +43,65 @@ class ToolsUnsupported(Exception):
     """The provider rejected the tools field. The caller streams a normal reply instead."""
 
 
-def tool_spec() -> list[dict[str, Any]]:
-    return [
-        {
-            "name": "web_search",
-            "description": "Search the web. Use the game name plus what you need to know.",
-            "parameters": {
-                "type": "object",
-                "properties": {"query": {"type": "string"}},
-                "required": ["query"],
-            },
-        },
-        {
-            "name": "fetch_page",
-            "description": "Read one public page and return its title and text.",
-            "parameters": {
-                "type": "object",
-                "properties": {"url": {"type": "string"}},
-                "required": ["url"],
-            },
-        },
-    ]
+def tool_spec(*, include_web: bool = True, include_screen: bool = False) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    if include_web:
+        specs.extend(
+            [
+                {
+                    "name": "web_search",
+                    "description": "Search the web. Use the game name plus what you need to know.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                },
+                {
+                    "name": "fetch_page",
+                    "description": "Read one public page and return its title and text.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"url": {"type": "string"}},
+                        "required": ["url"],
+                    },
+                },
+            ]
+        )
+    if include_screen:
+        specs.append(
+            {
+                "name": "look_at_screen",
+                "description": (
+                    "Take a screenshot of the Steam Deck and look at it. "
+                    "Use this when the person asks what is on screen or how to do what they see."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"reason": {"type": "string"}},
+                    "required": [],
+                },
+            }
+        )
+    return specs
+
+
+class ScreenCapture:
+    """Runs the screenshot grab and keeps the JPEG for the next model turn."""
+
+    def __init__(self, grab: Callable[[dict[str, Any]], tuple[str, bytes | None]]) -> None:
+        self.grab = grab
+        self._image: bytes | None = None
+
+    def run(self, arguments: dict[str, Any]) -> str:
+        text, image = self.grab(arguments)
+        self._image = image
+        return text
+
+    def take(self) -> bytes | None:
+        image = self._image
+        self._image = None
+        return image
 
 
 _TOOL_TAG = re.compile(r"<(?:tool_call|function_call)>\s*(.*?)\s*</(?:tool_call|function_call)>", re.I | re.S)
@@ -72,7 +115,7 @@ _INTENT = re.compile(
 )
 
 
-def text_tool_calls(blob: str) -> list[dict[str, str]]:
+def text_tool_calls(blob: str, allowed: set[str] | None = None) -> list[dict[str, str]]:
     """Qwen and Hermes put calls in `<tool_call>{...}</tool_call>` instead of tool_calls."""
     found: list[dict[str, str]] = []
     for match in _TOOL_TAG.finditer(blob or ""):
@@ -84,7 +127,8 @@ def text_tool_calls(blob: str) -> list[dict[str, str]]:
             name = name or str(function.get("name") or "")
             if arguments is None:
                 arguments = function.get("arguments")
-        if name not in {"web_search", "fetch_page"}:
+        names = allowed or {"web_search", "fetch_page"}
+        if name not in names:
             continue
         if isinstance(arguments, str):
             encoded = arguments or "{}"
@@ -136,13 +180,33 @@ def _loads(value: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _with_hint(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _with_hint(
+    messages: list[dict[str, Any]], *, include_web: bool = True, include_screen: bool = False
+) -> list[dict[str, Any]]:
+    parts = []
+    if include_web:
+        parts.append(_HINT)
+    if include_screen:
+        parts.append(_SCREEN_HINT)
+    hint = "\n\n".join(parts)
     copied = [dict(item) for item in messages]
-    if copied and copied[0].get("role") == "system" and isinstance(copied[0].get("content"), str):
-        copied[0]["content"] = copied[0]["content"] + "\n\n" + _HINT
+    if not hint:
         return copied
-    copied.insert(0, {"role": "system", "content": _HINT})
+    if copied and copied[0].get("role") == "system" and isinstance(copied[0].get("content"), str):
+        copied[0]["content"] = copied[0]["content"] + "\n\n" + hint
+        return copied
+    copied.insert(0, {"role": "system", "content": hint})
     return copied
+
+
+def _shot_bytes(screen: ScreenCapture | None, name: str) -> bytes | None:
+    if screen is None or name != "look_at_screen":
+        return None
+    return screen.take()
+
+
+def _jpeg_b64(image: bytes) -> str:
+    return base64.b64encode(image).decode("ascii")
 
 
 def iter_with_tools(
@@ -152,18 +216,31 @@ def iter_with_tools(
     cancel: threading.Event,
     client: WebClient,
     on_status: Status | None = None,
+    screen: ScreenCapture | None = None,
+    include_web: bool = True,
 ) -> Iterator[str]:
     kind = str(provider.get("kind") or "")
     if kind not in TOOL_KINDS:
         raise ToolsUnsupported(kind)
     if not str(model or "").strip() and kind == "llamacpp":
         model = _llamacpp_default_model(provider)
-    prepared = _with_hint(messages)
+    include_screen = screen is not None
+    if not include_web and not include_screen:
+        raise ToolsUnsupported(kind)
+    prepared = _with_hint(messages, include_web=include_web, include_screen=include_screen)
     notify = on_status or (lambda _phase: None)
 
     pages = {"n": 0}
 
     def execute(name: str, arguments: dict[str, Any]) -> str:
+        if name == "look_at_screen":
+            notify("screen")
+            try:
+                if screen is None:
+                    return json.dumps({"error": "Screen capture is turned off in settings."})
+                return screen.run(arguments)
+            finally:
+                notify("thinking")
         if name == "fetch_page":
             pages["n"] += 1
             notify(f"reading:{pages['n']}")
@@ -175,15 +252,25 @@ def iter_with_tools(
             notify("thinking")
 
     if kind == "anthropic":
-        yield from _anthropic_tools(provider, prepared, model, cancel, execute)
+        yield from _anthropic_tools(provider, prepared, model, cancel, execute, screen, include_web)
         return
     if kind == "gemini":
-        yield from _gemini_tools(provider, prepared, model, cancel, execute)
+        yield from _gemini_tools(provider, prepared, model, cancel, execute, screen, include_web)
         return
     if kind == "ollama":
-        yield from _ollama_tools(provider, prepared, model, cancel, execute)
+        yield from _ollama_tools(provider, prepared, model, cancel, execute, screen, include_web)
         return
-    yield from _openai_tools(provider, prepared, model, cancel, execute, notify)
+    yield from _openai_tools(provider, prepared, model, cancel, execute, notify, screen, include_web)
+
+
+def _openai_shot(image: bytes) -> dict[str, Any]:
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "This is the screenshot you just took."},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + _jpeg_b64(image)}},
+        ],
+    }
 
 
 def _openai_tools(
@@ -193,11 +280,15 @@ def _openai_tools(
     cancel: threading.Event,
     execute: Executor,
     notify: Status | None = None,
+    screen: ScreenCapture | None = None,
+    include_web: bool = True,
 ) -> Iterator[str]:
     if provider.get("kind") in {"openai", "hermes", "xai"}:
         require_credentials(provider)
     token_field = "max_completion_tokens" if provider.get("kind") == "openai" else "max_tokens"
-    tools = [{"type": "function", "function": spec} for spec in tool_spec()]
+    specs = tool_spec(include_web=include_web, include_screen=screen is not None)
+    allowed = {spec["name"] for spec in specs}
+    tools = [{"type": "function", "function": spec} for spec in specs]
     working = list(messages)
     url = join_url(_openai_root(provider), "chat/completions")
     timeout = 300 if provider.get("kind") == "xai" else 120
@@ -216,8 +307,8 @@ def _openai_tools(
             provider, url, body, timeout, cancel, emit=False, notify=notify
         )
         if not calls:
-            calls = text_tool_calls(text) + text_tool_calls(reasoning)
-        if not calls and not looked_up and wants_lookup(f"{text}\n{reasoning}"):
+            calls = text_tool_calls(text, allowed) + text_tool_calls(reasoning, allowed)
+        if include_web and not calls and not looked_up and wants_lookup(f"{text}\n{reasoning}"):
             looked_up = True
             query = _last_user_text(working)
             result = execute("web_search", {"query": query})
@@ -250,6 +341,9 @@ def _openai_tools(
         for call in calls:
             result = execute(call["name"], _loads(call["arguments"]))
             working.append({"role": "tool", "tool_call_id": call["id"] or call["name"], "content": result})
+            image = _shot_bytes(screen, call["name"])
+            if image:
+                working.append(_openai_shot(image))
     if cancel.is_set():
         return
     body = {"model": model, "messages": working, "stream": True, token_field: _max_tokens(provider)}
@@ -347,6 +441,8 @@ def _anthropic_tools(
     model: str,
     cancel: threading.Event,
     execute: Executor,
+    screen: ScreenCapture | None = None,
+    include_web: bool = True,
 ) -> Iterator[str]:
     token = require_credentials(provider)
     system = ""
@@ -359,7 +455,7 @@ def _anthropic_tools(
             conv.append({"role": role, "content": str(message.get("content") or "")})
     tools = [
         {"name": spec["name"], "description": spec["description"], "input_schema": spec["parameters"]}
-        for spec in tool_spec()
+        for spec in tool_spec(include_web=include_web, include_screen=screen is not None)
     ]
     headers = {
         "Content-Type": "application/json",
@@ -393,6 +489,7 @@ def _anthropic_tools(
             }
         )
         results = []
+        shots: list[bytes] = []
         for call in calls:
             results.append(
                 {
@@ -401,7 +498,23 @@ def _anthropic_tools(
                     "content": execute(call["name"], _loads(call["arguments"])),
                 }
             )
+            image = _shot_bytes(screen, call["name"])
+            if image:
+                shots.append(image)
         conv.append({"role": "user", "content": results})
+        for image in shots:
+            conv.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/jpeg", "data": _jpeg_b64(image)},
+                        },
+                        {"type": "text", "text": "This is the screenshot you just took."},
+                    ],
+                }
+            )
 
 
 def _stream_anthropic(
@@ -455,6 +568,8 @@ def _gemini_tools(
     model: str,
     cancel: threading.Event,
     execute: Executor,
+    screen: ScreenCapture | None = None,
+    include_web: bool = True,
 ) -> Iterator[str]:
     system = ""
     contents: list[dict[str, Any]] = []
@@ -466,7 +581,7 @@ def _gemini_tools(
         contents.append({"role": role, "parts": [{"text": str(message.get("content") or "")}]})
     declarations = [
         {"name": spec["name"], "description": spec["description"], "parameters": spec["parameters"]}
-        for spec in tool_spec()
+        for spec in tool_spec(include_web=include_web, include_screen=screen is not None)
     ]
     safe_model = urllib.parse.quote(model, safe="")
     url = join_url(_base(provider), f"models/{safe_model}:streamGenerateContent?alt=sse")
@@ -489,20 +604,31 @@ def _gemini_tools(
                 "parts": [{"functionCall": {"name": call["name"], "args": _loads(call["arguments"])}} for call in calls],
             }
         )
-        contents.append(
-            {
-                "role": "user",
-                "parts": [
-                    {
-                        "functionResponse": {
-                            "name": call["name"],
-                            "response": {"result": execute(call["name"], _loads(call["arguments"]))},
-                        }
+        parts = []
+        shots: list[bytes] = []
+        for call in calls:
+            parts.append(
+                {
+                    "functionResponse": {
+                        "name": call["name"],
+                        "response": {"result": execute(call["name"], _loads(call["arguments"]))},
                     }
-                    for call in calls
-                ],
-            }
-        )
+                }
+            )
+            image = _shot_bytes(screen, call["name"])
+            if image:
+                shots.append(image)
+        contents.append({"role": "user", "parts": parts})
+        for image in shots:
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [
+                        {"inlineData": {"mimeType": "image/jpeg", "data": _jpeg_b64(image)}},
+                        {"text": "This is the screenshot you just took."},
+                    ],
+                }
+            )
 
 
 def _stream_gemini(
@@ -555,8 +681,13 @@ def _ollama_tools(
     model: str,
     cancel: threading.Event,
     execute: Executor,
+    screen: ScreenCapture | None = None,
+    include_web: bool = True,
 ) -> Iterator[str]:
-    tools = [{"type": "function", "function": spec} for spec in tool_spec()]
+    tools = [
+        {"type": "function", "function": spec}
+        for spec in tool_spec(include_web=include_web, include_screen=screen is not None)
+    ]
     working = list(messages)
     url = join_url(_base(provider), "api/chat")
     for _round in range(_MAX_ROUNDS):
@@ -578,6 +709,15 @@ def _ollama_tools(
             name = str(function.get("name") or "")
             result = execute(name, _loads(function.get("arguments")))
             working.append({"role": "tool", "content": result})
+            image = _shot_bytes(screen, name)
+            if image:
+                working.append(
+                    {
+                        "role": "user",
+                        "content": "This is the screenshot you just took.",
+                        "images": [_jpeg_b64(image)],
+                    }
+                )
 
 
 def _stream_ollama(

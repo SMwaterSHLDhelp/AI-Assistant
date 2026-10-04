@@ -73,6 +73,8 @@ export function ChatPanel() {
   const [visionModels, setVisionModels] = useState<string[]>([]);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [speaking, setSpeaking] = useState(false);
+  const speakingRef = useRef(false);
+  speakingRef.current = speaking;
   const requestRef = useRef<string | null>(null);
   const streamSession = useRef("");
   const sessionRef = useRef("");
@@ -282,6 +284,12 @@ export function ChatPanel() {
 
   useEffect(() => {
     const offChord = bindHearingChord(() => {
+      if (speakingRef.current) {
+        speakingRef.current = false;
+        setSpeaking(false);
+        void stopSpeaking();
+        return;
+      }
       void pushToTalk();
     });
     const offSleep = bindSleep((sleeping) => {
@@ -512,6 +520,16 @@ export function ChatPanel() {
     }));
   };
 
+  const stopTalking = async () => {
+    speakingRef.current = false;
+    setSpeaking(false);
+    try {
+      await stopSpeaking();
+    } catch (err) {
+      setError(nextStep(errorMessage(err, "Could not stop talking. Try again.")));
+    }
+  };
+
   const stop = async () => {
     setSpeaking(false);
     try {
@@ -651,6 +669,11 @@ export function ChatPanel() {
       </PanelSection>
 
       <PanelSection title="Chat">
+        {speaking ? (
+          <ButtonItem layout="below" onClick={() => void stopTalking()}>
+            Stop talking
+          </ButtonItem>
+        ) : null}
         {state.messages.length === 0 ? (
           <PanelSectionRow>
             <div style={{ fontSize: "16px" }}>
@@ -706,7 +729,7 @@ export function ChatPanel() {
           disabled={streaming}
           onClick={() => {
             if (speaking) {
-              void stop();
+              void stopTalking();
               return;
             }
             if (!state.hearing.ptt_enabled) {

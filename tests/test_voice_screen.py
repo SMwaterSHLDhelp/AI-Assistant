@@ -301,7 +301,8 @@ def test_piper_command_uses_the_deck_audio_session(tmp_path, monkeypatch) -> Non
     assert b"Hello there" in piper.stdin.snapshot
     long = engine.speak_blocking("word " * 500, force=True)
     assert long["ok"] is True
-    assert len(procs[-2].stdin.snapshot) <= 700
+    assert len(procs[-2].stdin.snapshot) > 700
+    assert procs[-2].stdin.snapshot.decode().startswith("word word")
 
 
 def test_kitten_install_failure_falls_back_to_piper(tmp_path, monkeypatch) -> None:
@@ -521,6 +522,8 @@ def test_screen_look_sends_jpeg_vision_and_does_not_store_it(tmp_path) -> None:
     assert "JFIF" not in blob
     assert user[1]["image_url"]["url"] not in blob
     assert spoken == ["Press the glowing door."]
+    assert any(item.get("type") == "toast" and item.get("message") == "Taking photo" for item in host.events)
+    assert any(item.get("message") == "Looking at your screen..." and item.get("type") == "toast" for item in host.events)
     hidden = service.look_at_screen(saved["provider"]["id"], "gpt-4o", "look", "req-2", "", "", False)
     assert hidden["ok"] is False
     assert "Quick Access" in hidden["error"]

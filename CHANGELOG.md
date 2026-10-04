@@ -6,6 +6,14 @@ Move items from **Unreleased** into a version section before tagging. The releas
 
 ## [Unreleased]
 
+## [0.1.0-rc.17] - 2026-10-04
+
+### Added
+
+- A Steam toast reads "Taking photo" whenever a screenshot is taken: the Look at my screen button, a voice phrase such as "how do I do this", Steam+Y, or the model calling look_at_screen. A second toast says "Looking at your screen...". The toast uses Decky's toaster, so it shows while a game is running and while the Quick Access menu is closed. Vision models get a look_at_screen tool only when Screen help's capture switch is on. The JPEG is attached on the next turn. If capture is off, the tool is not offered and nothing is captured.
+- Spoken replies stay words. While spoken replies are on, the system prompt asks for one to three plain sentences, with no markdown, lists, or symbols, unless more detail was requested. Before Piper or KittenTTS, markdown, emoji, and other symbols are removed, lists become sentences, abbreviations such as "e.g." are expanded, a code block becomes "I put the code in the chat.", and a URL becomes "The link is in the chat." The message in the chat stays formatted. The whole sanitized reply is spoken.
+- While a reply is being spoken, the chat shows Stop talking. "stop", "stop talking", "shut up", and "be quiet" stop speech. The wake word stays on during playback, and other words heard while the voice is playing are ignored so the reply does not answer itself. Pressing the push-to-talk chord during playback stops speech instead of starting a new recording. Playback ends immediately, later sentences are not started, and the text reply stays on screen.
+
 ## [0.1.0-rc.16] - 2026-10-03
 
 ### Fixed

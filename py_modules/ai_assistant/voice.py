@@ -10,11 +10,13 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import subprocess
 import tarfile
 import threading
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -42,8 +44,35 @@ KITTEN_VOICES = ("Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "L
 DEFAULT_KITTEN = "Jasper"
 KITTEN_WHEEL = "https://github.com/KittenML/KittenTTS/releases/download/0.8.1/kittentts-0.8.1-py3-none-any.whl"
 KITTEN_FAILURE = "KittenTTS could not be installed on this SteamOS. Piper is still available."
-SPEAK_LIMIT = 700
 TEST_LINE = "Hi. I am the voice on your Steam Deck."
+SPOKEN_STYLE = (
+    "Spoken replies are on. Answer in short, plain spoken sentences. "
+    "Do not use markdown, lists, headings, tables, code, emoji, URLs, or other symbols. "
+    "Use one to three sentences unless the person asks for more detail."
+)
+CODE_NOTE = "I put the code in the chat."
+LINK_NOTE = "The link is in the chat."
+TABLE_NOTE = "The table is in the chat."
+_FENCE = re.compile(r"```.*?```", re.S)
+_INLINE = re.compile(r"`([^`]*)`")
+_MD_LINK = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
+_URL = re.compile(r"\b(?:https?://|www\.)\S+", re.I)
+_HEADING = re.compile(r"^\s{0,3}#{1,6}\s*")
+_BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+_TABLE = re.compile(r"^\s*\|.+\|\s*$")
+_TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+_BOLD = re.compile(r"(\*\*|__)(.+?)\1")
+_ITALIC = re.compile(r"(?<!\w)(\*|_)(?!\s)(.+?)(?<!\s)\1")
+_ABBREV = (
+    (re.compile(r"\be\.g\.?", re.I), "for example"),
+    (re.compile(r"\bi\.e\.?", re.I), "that is"),
+    (re.compile(r"\betc\.?", re.I), "and so on"),
+    (re.compile(r"\bvs\.?", re.I), "versus"),
+    (re.compile(r"\bDr\.", re.I), "Doctor"),
+    (re.compile(r"\bMr\.", re.I), "Mister"),
+    (re.compile(r"\bMrs\.", re.I), "Missus"),
+    (re.compile(r"\bapprox\.?", re.I), "approximately"),
+)
 IDLE_SECONDS = 45
 
 Fetcher = Callable[[str, str], None]
@@ -185,6 +214,60 @@ def _reject_unsafe_member(member: tarfile.TarInfo, root: str) -> None:
         raise ValueError("Archive path is not safe")
 
 
+def _speech_char(char: str) -> bool:
+    if char.isalnum() or char.isspace() or char in ".,?!'’-":
+        return True
+    return unicodedata.category(char).startswith("L")
+
+
+def for_speech(text: str) -> str:
+    """Words for Piper or KittenTTS. The on-screen reply stays as the model wrote it."""
+    raw = str(text or "").replace("\r\n", "\n")
+    if not raw.strip():
+        return ""
+    notes: list[str] = []
+    if _FENCE.search(raw):
+        notes.append(CODE_NOTE)
+        raw = _FENCE.sub(" ", raw)
+    raw = _INLINE.sub(lambda match: " " + match.group(1) + " ", raw)
+    if _MD_LINK.search(raw) or _URL.search(raw):
+        notes.append(LINK_NOTE)
+    raw = _MD_LINK.sub(lambda match: match.group(1), raw)
+    raw = _URL.sub(" ", raw)
+    for pattern, spoken in _ABBREV:
+        raw = pattern.sub(spoken, raw)
+    raw = _BOLD.sub(r"\2", raw)
+    raw = _ITALIC.sub(r"\2", raw)
+    lines: list[str] = []
+    saw_table = False
+    for line in raw.splitlines():
+        if _TABLE.match(line) or _TABLE_RULE.match(line):
+            saw_table = True
+            continue
+        bullet = _BULLET.match(line) is not None
+        line = _HEADING.sub("", line)
+        line = _BULLET.sub("", line).strip()
+        if not line:
+            continue
+        if bullet and line[-1] not in ".!?":
+            line += "."
+        lines.append(line)
+    if saw_table:
+        notes.append(TABLE_NOTE)
+    spoken = " ".join(lines)
+    spoken = "".join(char for char in spoken if _speech_char(char))
+    spoken = " ".join(spoken.split())
+    for note in notes:
+        if note not in spoken:
+            spoken = f"{spoken} {note}".strip()
+    return spoken
+
+
+def spoken_sentences(text: str) -> list[str]:
+    parts = [part.strip() for part in re.findall(r"[^.!?]+[.!?]?", text) if part.strip()]
+    return parts or ([text.strip()] if text.strip() else [])
+
+
 class VoiceEngine:
     def __init__(
         self,
@@ -212,6 +295,8 @@ class VoiceEngine:
         self._idle_deadline = 0.0
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        self._generation = 0
+        self._speaking = False
 
     def public(self) -> dict[str, Any]:
         try:
@@ -232,17 +317,30 @@ class VoiceEngine:
         self.store.update_voice(cleaned)
         return self.public()
 
-    def stop(self) -> None:
-        self._stop.set()
+    def stop(self) -> int:
+        """Kill playback and drop any sentence that has not started."""
         with self._lock:
+            self._generation += 1
+            generation = self._generation
+            self._speaking = False
             procs = list(self._procs)
             resident = self._resident
             self._procs.clear()
             self._resident = None
+        self._stop.set()
         for proc in procs:
             self._kill(proc)
         if resident is not None:
             self._kill(resident)
+        return generation
+
+    def is_speaking(self) -> bool:
+        with self._lock:
+            return self._speaking
+
+    def _interrupted(self, token: int) -> bool:
+        with self._lock:
+            return token != self._generation or self._stop.is_set()
 
     def unload_if_idle(self) -> bool:
         with self._lock:
@@ -273,27 +371,46 @@ class VoiceEngine:
         return {"ok": True, "voice": self.public()}
 
     def speak_blocking(self, text: str, *, force: bool = False) -> dict[str, Any]:
-        self.stop()
-        self._stop.clear()
-        spoken = " ".join(str(text or "").split())[:SPEAK_LIMIT]
+        generation = self.stop()
+        spoken = for_speech(text)
         if not spoken:
             return {"ok": True}
         settings = self.public()
         if not settings["voice_enabled"] and not force:
             return {"ok": True, "skipped": True}
+        with self._lock:
+            if self._generation != generation:
+                return {"ok": True, "stopped": True}
+            self._stop.clear()
+            self._generation += 1
+            token = self._generation
+            self._speaking = True
         warning = ""
-        if settings["voice_engine"] == "kittentts":
-            try:
-                self._speak_kitten(spoken, settings)
-                return {"ok": True}
-            except Exception as exc:  # noqa: BLE001 - fall back so voice itself still works
-                warning = _kitten_message(exc)
-                self.store.update_voice({"kitten_error": warning, "voice_engine": "piper"})
-                settings = self.public()
         try:
-            self._speak_piper(spoken, settings)
+            for sentence in spoken_sentences(spoken):
+                if self._interrupted(token):
+                    return {"ok": True, "stopped": True, "warning": warning}
+                if settings["voice_engine"] == "kittentts":
+                    try:
+                        self._speak_kitten(sentence, settings)
+                        continue
+                    except Exception as exc:  # noqa: BLE001 - fall back so voice itself still works
+                        if self._interrupted(token):
+                            return {"ok": True, "stopped": True, "warning": warning}
+                        warning = _kitten_message(exc)
+                        self.store.update_voice({"kitten_error": warning, "voice_engine": "piper"})
+                        settings = self.public()
+                self._speak_piper(sentence, settings)
         except Exception as exc:  # noqa: BLE001 - chat must succeed even when speech fails
+            if self._interrupted(token):
+                return {"ok": True, "stopped": True, "warning": warning}
             return {"ok": False, "error": str(exc)[:400], "warning": warning}
+        finally:
+            with self._lock:
+                if token == self._generation:
+                    self._speaking = False
+        if self._interrupted(token):
+            return {"ok": True, "stopped": True, "warning": warning}
         if warning:
             return {"ok": True, "warning": warning}
         return {"ok": True}
@@ -321,13 +438,22 @@ class VoiceEngine:
             self._procs = [piper, play]
         if piper.stdout is not None:
             piper.stdout.close()
-        if piper.stdin is not None:
-            piper.stdin.write(text.encode("utf-8"))
-            piper.stdin.close()
-        play.wait(timeout=120)
-        piper.wait(timeout=30)
-        with self._lock:
-            self._procs = [proc for proc in self._procs if proc not in {piper, play}]
+        try:
+            if self._stop.is_set():
+                return
+            if piper.stdin is not None:
+                piper.stdin.write(text.encode("utf-8"))
+                piper.stdin.close()
+            play.wait(timeout=120)
+            piper.wait(timeout=30)
+        except (BrokenPipeError, OSError, subprocess.TimeoutExpired):
+            self._kill(piper)
+            self._kill(play)
+            if not self._stop.is_set():
+                raise
+        finally:
+            with self._lock:
+                self._procs = [proc for proc in self._procs if proc not in {piper, play}]
 
     def _speak_kitten(self, text: str, settings: dict[str, Any]) -> None:
         python = self._install_kitten(force=False)

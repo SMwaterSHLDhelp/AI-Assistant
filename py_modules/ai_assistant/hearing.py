@@ -199,12 +199,23 @@ def normalize_phrase(text: str) -> str:
     return " ".join(cleaned.split())
 
 
-def classify_phrase(text: str, pending: bool) -> str:
+def wants_quiet(text: str) -> bool:
+    cleaned = normalize_phrase(text)
+    if cleaned in {"stop", "stop talking", "shut up", "be quiet"}:
+        return True
+    return cleaned.startswith(("stop talking", "shut up", "be quiet"))
+
+
+def classify_phrase(text: str, pending: bool, speaking: bool = False) -> str:
     cleaned = normalize_phrase(text)
     if not cleaned:
         return "ignore"
     if cleaned == "stop listening" or cleaned.startswith("stop listening"):
         return "stop_listening"
+    if speaking and wants_quiet(cleaned):
+        return "stop_talking"
+    if speaking:
+        return "ignore"
     if cleaned in {"new chat", "start a new chat"}:
         return "new_chat"
     if wants_screen_look(text):
@@ -320,6 +331,7 @@ class HearingEngine:
         notify: Callable[[dict[str, Any]], None] | None = None,
         on_command: Callable[[str, str], None] | None = None,
         pending: Callable[[], bool] | None = None,
+        speaking: Callable[[], bool] | None = None,
         fetch: Fetcher | None = None,
         popen: PopenFactory | None = None,
         which: Which | None = None,
@@ -331,6 +343,7 @@ class HearingEngine:
         self.notify = notify or (lambda _payload: None)
         self.on_command = on_command or (lambda _action, _text: None)
         self.pending = pending or (lambda: False)
+        self.speaking = speaking or (lambda: False)
         self.fetch = fetch or _download
         self.popen = popen or subprocess.Popen
         self.which = which or shutil.which
@@ -454,11 +467,15 @@ class HearingEngine:
         self.python = ensure_voice_venv(self.store.runtime_dir, base)
 
     def dispatch(self, text: str) -> str:
-        action = classify_phrase(text, self.pending())
-        payload = {"type": "hearing", "phase": "transcript", "transcript": text, "action": action}
+        action = classify_phrase(text, self.pending(), self.speaking())
         if action == "ignore":
             self._set_phase("listening" if self.public()["wake_enabled"] else "off", "")
             return action
+        if action == "stop_talking":
+            self.on_command("stop_talking", text)
+            self._set_phase("listening" if self.public()["wake_enabled"] else "off", "")
+            return action
+        payload = {"type": "hearing", "phase": "transcript", "transcript": text, "action": action}
         self.notify(payload)
         if action == "stop_listening":
             self.update({"wake_enabled": False})

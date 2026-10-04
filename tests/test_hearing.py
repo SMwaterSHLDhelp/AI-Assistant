@@ -102,6 +102,12 @@ def test_phrase_routing() -> None:
     assert classify_phrase("stop", True) == "cancel"
     assert classify_phrase("stop", False) == "message"
     assert classify_phrase("open the map", False) == "message"
+    assert classify_phrase("stop", False, True) == "stop_talking"
+    assert classify_phrase("stop talking", False, True) == "stop_talking"
+    assert classify_phrase("shut up", False, True) == "stop_talking"
+    assert classify_phrase("be quiet", False, True) == "stop_talking"
+    assert classify_phrase("open the map", False, True) == "ignore"
+    assert classify_phrase("stop listening", False, True) == "stop_listening"
 
 
 def test_sensitivity_maps_onto_a_wake_threshold() -> None:
